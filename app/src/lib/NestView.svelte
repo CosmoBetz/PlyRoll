@@ -1,10 +1,11 @@
 <script lang="ts">
-  import type { AppView, Grouping, JobSettings, LibraryView, LiveNest as Live, Material } from "./types";
+  import type { AppView, Grouping, JobSettings, LibraryView, LiveNest as Live, Material, Paper, Roll, RollsView } from "./types";
   import RollView from "./RollView.svelte";
 
   let {
     view,
     library,
+    rolls,
     live,
     onjob,
     onstart,
@@ -13,9 +14,13 @@
     onmanage,
     onaddmaterial,
     onplies,
+    onmanagerolls,
+    onbook,
+    onunbook,
   }: {
     view: AppView;
     library: LibraryView;
+    rolls: RollsView;
     live: Live | null;
     onjob: (job: JobSettings) => void;
     onstart: () => void;
@@ -24,6 +29,9 @@
     onmanage: () => void;
     onaddmaterial: (m: Material) => void;
     onplies: () => void;
+    onmanagerolls: () => void;
+    onbook: () => void;
+    onunbook: () => void;
   } = $props();
 
   let roll = $state<RollView>();
@@ -42,8 +50,49 @@
 
   function pickMaterial(name: string) {
     const m = library.materials.find((x) => x.name === name);
-    if (m) onjob({ ...job, material: structuredClone($state.snapshot(m)) });
+    // A roll of another material no longer fits the job.
+    if (m) onjob({ ...job, material: structuredClone($state.snapshot(m)), roll: jobRoll && jobRoll.material !== name ? null : (job.roll ?? null) });
   }
+
+  // ---- roll inventory
+  const jobRoll = $derived(job.roll ? (rolls.rolls.find((r) => r.id === job.roll) ?? null) : null);
+  const rollChoices = $derived(mat ? rolls.rolls.filter((r) => r.material === mat.name) : []);
+  const expired = (r: Roll) => !!r.expires && r.expires < rolls.today;
+  // Where the current nest is booked, if anywhere.
+  const booking = $derived.by(() => {
+    if (!result) return null;
+    for (const r of rolls.rolls) {
+      const u = r.usage?.find((x) => x.result === result.key);
+      if (u) return { roll: r, usage: u };
+    }
+    return null;
+  });
+  // Length the job's roll has for this nest (a booking of this nest counted back).
+  const rollLeft = $derived(jobRoll ? jobRoll.remaining_m + (booking && booking.roll.id === jobRoll.id ? booking.usage.length_m : 0) : null);
+  const need = $derived(live ? (live.length != null && live.placements ? live.length / 1000 : null) : result ? result.used_length / 1000 : null);
+  const short = $derived(rollLeft != null && need != null && need > rollLeft + 1e-9);
+  function pickRoll(id: string) {
+    if ((id || null) !== (job.roll ?? null)) onjob({ ...job, roll: id || null });
+  }
+
+  // ---- 1:1 templates
+  const PAPERS: { value: string; label: string }[] = [
+    { value: "", label: "No templates" },
+    { value: "a4", label: "A4 sheets" },
+    { value: "a3", label: "A3 sheets" },
+    { value: "letter", label: "Letter sheets" },
+    { value: "roll", label: "Plotter roll" },
+  ];
+  const paper = $derived(job.templates ?? null);
+  function setPaper(kind: string) {
+    const t: Paper | null =
+      kind === "" ? null : kind === "roll" ? { kind: "roll", width_mm: paper?.kind === "roll" ? paper.width_mm : 914 } : ({ kind } as Paper);
+    onjob({ ...job, templates: t });
+  }
+  function setPlotterWidth(w: number) {
+    if (Number.isFinite(w) && w >= 100 && w <= 5000 && !(paper?.kind === "roll" && paper.width_mm === w)) onjob({ ...job, templates: { kind: "roll", width_mm: w } });
+  }
+  const paperName = (p: Paper) => (p.kind === "roll" ? `a ${p.width_mm} mm plotter roll` : p.kind === "letter" ? "Letter" : p.kind.toUpperCase());
   function setTime(s: number) {
     if (Number.isFinite(s) && s >= 1 && s <= 3600 && s !== job.time_s) onjob({ ...job, time_s: Math.round(s) });
   }
@@ -106,6 +155,41 @@
           {/if}
         {/if}
         <button class="manage" onclick={onmanage}>Manage materials…</button>
+      {/if}
+    </section>
+
+    <section>
+      <h4>Roll</h4>
+      {#if !mat}
+        <p class="hint">Choose a material first.</p>
+      {:else}
+        <select value={job.roll ?? ""} onchange={(e) => pickRoll((e.currentTarget as HTMLSelectElement).value)}>
+          <option value="">No roll picked</option>
+          {#if job.roll && (!jobRoll || jobRoll.material !== mat.name)}<option value={job.roll}>{job.roll}</option>{/if}
+          {#each rollChoices as r (r.id)}
+            <option value={r.id}>{r.id} · {r.remaining_m.toFixed(2)} m{r.batch ? ` · ${r.batch}` : ""}{expired(r) ? " · expired" : ""}</option>
+          {/each}
+        </select>
+        {#if job.roll && !jobRoll}
+          <p class="note">Roll {job.roll} is not in the inventory. Pick another roll, or none.</p>
+        {:else if jobRoll && jobRoll.material !== mat.name}
+          <p class="note">Roll {jobRoll.id} is {jobRoll.material}, not {mat.name}.</p>
+        {:else if jobRoll}
+          <dl class="facts">
+            {#if jobRoll.batch}<dt>Batch</dt><dd>{jobRoll.batch}</dd>{/if}
+            <dt>Left</dt><dd>{jobRoll.remaining_m.toFixed(2)} m</dd>
+            {#if jobRoll.expires}<dt>Use by</dt><dd class:bad={expired(jobRoll)}>{jobRoll.expires}{expired(jobRoll) ? " (expired)" : ""}</dd>{/if}
+          </dl>
+          {#if expired(jobRoll)}<p class="note">This roll is past its use-by date.</p>{/if}
+          {#if short && need != null && rollLeft != null}
+            <p class="note bad-note">Not enough roll: {live ? "the nest so far needs" : "this nest needs"} {need.toFixed(2)} m, roll {jobRoll.id} has {rollLeft.toFixed(2)} m.</p>
+          {/if}
+        {:else if rollChoices.length === 0}
+          <p class="hint">No {mat.name} rolls in the inventory.</p>
+        {:else}
+          <p class="hint">Optional: the roll's batch goes on the report and labels, and you get a warning if the nest needs more than it has.</p>
+        {/if}
+        <button class="manage" onclick={onmanagerolls}>Manage rolls…</button>
       {/if}
     </section>
 
@@ -222,8 +306,33 @@
         <dt>Material</dt><dd>{result.shapes.material.name}</dd>
         <dt>Solved in</dt><dd class="num">{fmtTime(result.run.solve_seconds)}{result.run.stopped ? " (stopped)" : ""}</dd>
       </dl>
+      <div class="tpl">
+        <label for="paper">1:1 templates</label>
+        <select id="paper" value={paper?.kind ?? ""} onchange={(e) => setPaper((e.currentTarget as HTMLSelectElement).value)}>
+          {#each PAPERS as p (p.value)}<option value={p.value}>{p.label}</option>{/each}
+        </select>
+        {#if paper?.kind === "roll"}
+          <span class="u"
+            ><input type="number" min="100" max="5000" step="1" value={paper.width_mm} onchange={(e) => setPlotterWidth(Number((e.currentTarget as HTMLInputElement).value))} /> mm wide</span
+          >
+        {/if}
+      </div>
       <button class="primary big" onclick={onexport} disabled={!!exportBlock} title={exportBlock ?? "Write the cut files, report.pdf and labels.csv"}>Export cut files…</button>
-      {#if exportBlock}<p class="hint">{exportBlock}.</p>{:else}<p class="hint">Writes layout.dxf (CUT, MARK, LABEL, ROLL layers), report.pdf (numbers, layout, kit checklist), labels.csv for label printers, plies.csv, layout.svg and report.json.</p>{/if}
+      {#if exportBlock}<p class="hint">{exportBlock}.</p>{:else}<p class="hint">
+          Writes layout.dxf (CUT, MARK, LABEL, ROLL layers), report.pdf (numbers, layout, kit checklist), labels.csv for label printers, plies.csv, layout.svg and
+          report.json{#if paper}, and templates.pdf: the layout at true size on {paperName(paper)}, to print at 100% and tape together{/if}.
+        </p>{/if}
+      {#if booking}
+        <div class="booking">
+          Booked {booking.usage.length_m.toFixed(2)} m on roll <b>{booking.roll.id}</b> ({booking.usage.date}).
+          <button class="link" onclick={onunbook}>Take back</button>
+        </div>
+      {:else if !exportBlock && jobRoll && mat && jobRoll.material === mat.name}
+        <button class="big" onclick={onbook} disabled={short} title={short ? "The roll is too short for this nest" : "Once the job is cut"}
+          >Book {(result.used_length / 1000).toFixed(2)} m on roll {jobRoll.id}</button
+        >
+        <p class="hint">Once the job is cut: takes the used length off the roll in the inventory. Can be taken back.</p>
+      {/if}
       {#if result.warnings.length}
         <details><summary>{result.warnings.length} warning{result.warnings.length === 1 ? "" : "s"}</summary><ul>{#each result.warnings as w}<li>{w}</li>{/each}</ul></details>
       {/if}
@@ -317,6 +426,41 @@
   .manage {
     width: 100%;
     margin-top: 4px;
+  }
+  .bad-note {
+    background: var(--bad-soft);
+    color: var(--bad);
+  }
+  dd.bad {
+    color: var(--bad);
+  }
+  .tpl {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .tpl select {
+    width: auto;
+    flex: 1;
+  }
+  .tpl .u {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .tpl input {
+    width: 70px;
+  }
+  .booking {
+    margin-top: 12px;
+    font-size: 12px;
+    background: var(--ok-soft);
+    border-radius: 6px;
+    padding: 6px 8px;
   }
   .seg {
     display: flex;

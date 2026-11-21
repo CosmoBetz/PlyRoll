@@ -5,6 +5,8 @@
 use crate::export;
 use crate::geom::{BBox, FlattenMode};
 use crate::model::{Layout, PlyShape};
+use crate::rolls::RollInfo;
+use crate::template::Paper;
 use crate::verify::{VerifyReport, verify};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -51,18 +53,36 @@ pub struct RunInfo {
     pub stopped: bool,
 }
 
-/// Job name and date printed on report.pdf and in labels.csv.
+/// Job name, date and roll printed on report.pdf and in labels.csv.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReportMeta {
     pub job: String,
     pub date: String,
+    /// The roll the job is cut from, if one was picked.
+    pub roll: Option<RollInfo>,
 }
 
 impl ReportMeta {
-    /// Dated now (UTC).
+    /// Dated now (UTC), no roll.
     pub fn new(job: impl Into<String>) -> Self {
-        Self { job: job.into(), date: now_utc() }
+        Self { job: job.into(), date: now_utc(), roll: None }
     }
+
+    pub fn with_roll(self, roll: Option<RollInfo>) -> Self {
+        Self { roll, ..self }
+    }
+}
+
+/// Which optional files to write.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OutputOptions {
+    /// Write templates.pdf (1:1, tiled) on this paper.
+    pub templates: Option<Paper>,
+}
+
+/// Today as "2026-11-21" (UTC).
+pub fn today_utc() -> String {
+    now_utc()[..10].to_string()
 }
 
 /// Current date and time as "2026-11-21 14:05 UTC".
@@ -189,7 +209,8 @@ pub fn checklist(plies: &[PlyShape], layout: &Layout) -> Vec<KitGroup> {
 /// labels.csv: one row per cut ply in cutting order, for label printers.
 pub fn write_label_csv(path: &Path, plies: &[PlyShape], layout: &Layout, meta: &ReportMeta) -> Result<()> {
     let mut w = csv::Writer::from_path(path).with_context(|| format!("cannot write {}", path.display()))?;
-    w.write_record(["cut_no", "label", "shape", "angle_deg", "copy", "of", "kit", "material", "job", "x_mm", "y_mm"])?;
+    w.write_record(["cut_no", "label", "shape", "angle_deg", "copy", "of", "kit", "material", "job", "x_mm", "y_mm", "roll", "batch"])?;
+    let (roll, batch) = meta.roll.as_ref().map_or((String::new(), String::new()), |r| (r.id.clone(), r.batch.clone()));
     for c in cut_plies(plies, layout) {
         w.write_record([
             c.cut_no.to_string(),
@@ -203,6 +224,8 @@ pub fn write_label_csv(path: &Path, plies: &[PlyShape], layout: &Layout, meta: &
             meta.job.clone(),
             format!("{:.1}", c.x_mm),
             format!("{:.1}", c.y_mm),
+            roll.clone(),
+            batch.clone(),
         ])?;
     }
     w.flush()?;
@@ -210,8 +233,10 @@ pub fn write_label_csv(path: &Path, plies: &[PlyShape], layout: &Layout, meta: &
 }
 
 /// Writes report.json and layout.svg always; layout.dxf, plies.csv,
-/// report.pdf and labels.csv only when verification passed. Returns the files
-/// written.
+/// report.pdf, labels.csv and (when asked for) templates.pdf only when
+/// verification passed, removing any of them left from an earlier export.
+/// Returns the files written.
+#[allow(clippy::too_many_arguments)]
 pub fn write_outputs(
     dir: &Path,
     plies: &[PlyShape],
@@ -220,7 +245,11 @@ pub fn write_outputs(
     run: &RunInfo,
     warnings: &[String],
     meta: &ReportMeta,
+    opts: &OutputOptions,
 ) -> Result<Vec<PathBuf>> {
+    if let Some(p) = &opts.templates {
+        p.validate()?;
+    }
     std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
     let m = &layout.material;
     let mut json = serde_json::to_value(summary)?;
@@ -230,6 +259,9 @@ pub fn write_outputs(
     obj.insert("seed".into(), run.seed.into());
     obj.insert("stopped_early".into(), run.stopped.into());
     obj.insert("import_warnings".into(), serde_json::to_value(warnings)?);
+    if let Some(r) = &meta.roll {
+        obj.insert("roll".into(), serde_json::to_value(r)?);
+    }
     obj.insert("layout".into(), serde_json::to_value(layout)?);
     let mut written = Vec::new();
     let report = dir.join("report.json");
@@ -261,6 +293,25 @@ pub fn write_outputs(
         let labels = dir.join("labels.csv");
         write_label_csv(&labels, plies, layout, meta)?;
         written.push(labels);
+        if let Some(paper) = &opts.templates {
+            let tpl = dir.join("templates.pdf");
+            let (bytes, _) = crate::template::templates_pdf(plies, layout, paper, meta);
+            std::fs::write(&tpl, bytes).with_context(|| format!("cannot write {}", tpl.display()))?;
+            written.push(tpl);
+        }
+    }
+    // A file from an earlier export that was not written this time would
+    // describe another layout: remove it, so a folder never mixes two nests.
+    for name in ["layout.dxf", "plies.csv", "report.pdf", "labels.csv", "templates.pdf"] {
+        let f = dir.join(name);
+        if !written.contains(&f) {
+            match std::fs::remove_file(&f) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(e).with_context(|| format!("cannot remove the old {}", f.display()));
+                }
+                _ => {}
+            }
+        }
     }
     Ok(written)
 }

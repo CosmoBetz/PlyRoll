@@ -91,8 +91,8 @@ fn verified_layouts_get_a_pdf_and_labels_matching_plies_csv() {
     let sum = summarize(&plies, &layout);
     assert!(sum.verification.ok, "{:?}", sum.verification.issues);
     let dir = tmp("ok");
-    let meta = ReportMeta { job: "Demo ü".into(), date: "2026-11-21 10:00 UTC".into() };
-    let written = write_outputs(&dir, &plies, &layout, &sum, &RunInfo::default(), &["a warning".into()], &meta).unwrap();
+    let meta = ReportMeta { job: "Demo ü".into(), date: "2026-11-21 10:00 UTC".into(), roll: None };
+    let written = write_outputs(&dir, &plies, &layout, &sum, &RunInfo::default(), &["a warning".into()], &meta, &Default::default()).unwrap();
     let names: Vec<String> = written.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
     assert_eq!(names, ["report.json", "layout.svg", "layout.dxf", "plies.csv", "report.pdf", "labels.csv"]);
 
@@ -128,8 +128,8 @@ fn failed_verification_writes_no_report_pdf_or_labels() {
     let sum = summarize(&plies, &layout);
     assert!(!sum.verification.ok);
     let dir = tmp("bad");
-    let meta = ReportMeta { job: "bad".into(), date: "x".into() };
-    let written = write_outputs(&dir, &plies, &layout, &sum, &RunInfo::default(), &[], &meta).unwrap();
+    let meta = ReportMeta { job: "bad".into(), date: "x".into(), roll: None };
+    let written = write_outputs(&dir, &plies, &layout, &sum, &RunInfo::default(), &[], &meta, &Default::default()).unwrap();
     let names: Vec<String> = written.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
     assert_eq!(names, ["report.json", "layout.svg"]);
     assert!(!dir.join("report.pdf").exists() && !dir.join("labels.csv").exists());

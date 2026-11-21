@@ -21,14 +21,14 @@ const BODY_W: f32 = PAGE_W - 2.0 * MARGIN;
 /// Lowest y the body may use; the footer sits below it.
 const BOTTOM: f32 = MARGIN + 16.0;
 
-const REG: Name = Name(b"F1");
-const BOLD: Name = Name(b"F2");
-const MONO: Name = Name(b"F3");
+pub(crate) const REG: Name = Name(b"F1");
+pub(crate) const BOLD: Name = Name(b"F2");
+pub(crate) const MONO: Name = Name(b"F3");
 
-const INK: (f32, f32, f32) = (0.1, 0.1, 0.1);
-const MUTED: (f32, f32, f32) = (0.42, 0.42, 0.42);
-const KIT: (f32, f32, f32) = (0.18, 0.40, 0.80);
-const RULE: (f32, f32, f32) = (0.82, 0.82, 0.82);
+pub(crate) const INK: (f32, f32, f32) = (0.1, 0.1, 0.1);
+pub(crate) const MUTED: (f32, f32, f32) = (0.42, 0.42, 0.42);
+pub(crate) const KIT: (f32, f32, f32) = (0.18, 0.40, 0.80);
+pub(crate) const RULE: (f32, f32, f32) = (0.82, 0.82, 0.82);
 
 /// Builds the whole report.
 pub fn nest_report(plies: &[PlyShape], layout: &Layout, summary: &Summary, run: &RunInfo, warnings: &[String], meta: &ReportMeta) -> Vec<u8> {
@@ -37,32 +37,47 @@ pub fn nest_report(plies: &[PlyShape], layout: &Layout, summary: &Summary, run: 
     let mut y = header(&mut doc, plies, layout, summary, run, warnings, meta, &groups);
     layout_strips(&mut doc, &mut y, plies, layout, meta);
     checklist_pages(&mut doc, &groups, &layout.sections, meta);
-    doc.finish(meta, &layout.material.name, run.seed)
+    let material = &layout.material.name;
+    let seed = run.seed;
+    doc.each_page(|i, n, c, _, _| {
+        let left = format!("PlyRoll nest report  ·  {}  ·  {material}  ·  {}  ·  seed {seed}", meta.job, meta.date);
+        text(c, REG, 7.0, MARGIN, MARGIN, MUTED, &fit(&left, BODY_W - 80.0, 7.0));
+        let right = format!("page {} of {n}", i + 1);
+        text(c, REG, 7.0, PAGE_W - MARGIN - est_width(&right, 7.0), MARGIN, MUTED, &right);
+    });
+    doc.finish(&format!("Nest report: {}", meta.job), false)
 }
 
 #[derive(Default)]
-struct Doc {
-    pages: Vec<Content>,
+pub(crate) struct Doc {
+    /// Content with its page width and height, points.
+    pages: Vec<(Content, f32, f32)>,
 }
 
 impl Doc {
+    /// A new A4 landscape page.
     fn new_page(&mut self) -> &mut Content {
-        self.pages.push(Content::new());
-        self.pages.last_mut().unwrap()
+        self.new_page_sized(PAGE_W, PAGE_H)
     }
-    fn page(&mut self) -> &mut Content {
-        self.pages.last_mut().unwrap()
+    pub(crate) fn new_page_sized(&mut self, w: f32, h: f32) -> &mut Content {
+        self.pages.push((Content::new(), w, h));
+        &mut self.pages.last_mut().unwrap().0
     }
-
-    fn finish(mut self, meta: &ReportMeta, material: &str, seed: u64) -> Vec<u8> {
+    pub(crate) fn page(&mut self) -> &mut Content {
+        &mut self.pages.last_mut().unwrap().0
+    }
+    /// Calls `f(index, count, content, width, height)` on every page, for footers.
+    pub(crate) fn each_page(&mut self, mut f: impl FnMut(usize, usize, &mut Content, f32, f32)) {
         let n = self.pages.len();
-        for (i, c) in self.pages.iter_mut().enumerate() {
-            let left = format!("PlyRoll nest report  ·  {}  ·  {}  ·  {}  ·  seed {seed}", meta.job, material, meta.date);
-            text(c, REG, 7.0, MARGIN, MARGIN, MUTED, &fit(&left, BODY_W - 80.0, 7.0));
-            let right = format!("page {} of {n}", i + 1);
-            text(c, REG, 7.0, PAGE_W - MARGIN - est_width(&right, 7.0), MARGIN, MUTED, &right);
+        for (i, (c, w, h)) in self.pages.iter_mut().enumerate() {
+            f(i, n, c, *w, *h);
         }
+    }
 
+    /// The finished file. `actual_size` asks the print dialog not to scale the
+    /// pages (`/PrintScaling /None`), for true-size templates.
+    pub(crate) fn finish(self, title: &str, actual_size: bool) -> Vec<u8> {
+        let n = self.pages.len();
         let mut pdf = Pdf::new();
         let catalog = Ref::new(1);
         let tree = Ref::new(2);
@@ -70,12 +85,18 @@ impl Doc {
         let info = Ref::new(6);
         let page_ids: Vec<Ref> = (0..n).map(|i| Ref::new(7 + 2 * i as i32)).collect();
 
-        pdf.catalog(catalog).pages(tree);
+        {
+            let mut cat = pdf.catalog(catalog);
+            cat.pages(tree);
+            if actual_size {
+                cat.viewer_preferences().pair(Name(b"PrintScaling"), Name(b"None"));
+            }
+        }
         pdf.pages(tree).kids(page_ids.iter().copied()).count(n as i32);
-        for (i, content) in self.pages.into_iter().enumerate() {
+        for (i, (content, w, h)) in self.pages.into_iter().enumerate() {
             let content_id = Ref::new(8 + 2 * i as i32);
             let mut page = pdf.page(page_ids[i]);
-            page.media_box(Rect::new(0.0, 0.0, PAGE_W, PAGE_H));
+            page.media_box(Rect::new(0.0, 0.0, w, h));
             page.parent(tree);
             page.contents(content_id);
             {
@@ -92,8 +113,7 @@ impl Doc {
         for (_, id, base) in fonts {
             pdf.type1_font(id).base_font(Name(base.as_bytes())).encoding_predefined(Name(b"WinAnsiEncoding"));
         }
-        let title = format!("Nest report: {}", meta.job);
-        pdf.document_info(info).title(TextStr(&title)).producer(TextStr("PlyRoll"));
+        pdf.document_info(info).title(TextStr(title)).producer(TextStr("PlyRoll"));
         pdf.finish()
     }
 }
@@ -134,6 +154,27 @@ fn header(
     );
     text(c, REG, 9.5, MARGIN, y, INK, &fit(&line, BODY_W, 9.5));
     y -= 12.0;
+    if let Some(r) = &meta.roll {
+        let needed = layout.used_length / 1000.0;
+        let after = r.before_m - needed;
+        let short = after < -1e-9;
+        let mut line = format!("Roll {}", r.id);
+        if !r.batch.is_empty() {
+            line.push_str(&format!("  ·  batch {}", r.batch));
+        }
+        line.push_str(&format!("  ·  {:.2} m on the roll before this job, {:.2} m after", r.before_m, after.max(0.0)));
+        if let Some(e) = &r.expires {
+            line.push_str(&format!("  ·  use by {e}{}", if r.expired { " (EXPIRED)" } else { "" }));
+        }
+        let color = if short || r.expired { (0.7, 0.1, 0.1) } else { INK };
+        text(c, REG, 9.5, MARGIN, y, color, &fit(&line, BODY_W, 9.5));
+        y -= 12.0;
+        if short {
+            let t = format!("Not enough roll: this job needs {needed:.2} m, roll {} has {:.2} m.", r.id, r.before_m);
+            text(c, BOLD, 9.5, MARGIN, y, (0.7, 0.1, 0.1), &fit(&t, BODY_W, 9.5));
+            y -= 12.0;
+        }
+    }
 
     // Verification banner.
     let v = &s.verification;
@@ -525,7 +566,7 @@ fn checklist_page(doc: &mut Doc, meta: &ReportMeta, cont: bool) -> f32 {
 
 // ---------------------------------------------------------------- helpers
 
-fn text(c: &mut Content, font: Name, size: f32, x: f32, y: f32, color: (f32, f32, f32), s: &str) {
+pub(crate) fn text(c: &mut Content, font: Name, size: f32, x: f32, y: f32, color: (f32, f32, f32), s: &str) {
     c.set_fill_rgb(color.0, color.1, color.2);
     c.begin_text();
     c.set_font(font, size);
@@ -534,13 +575,13 @@ fn text(c: &mut Content, font: Name, size: f32, x: f32, y: f32, color: (f32, f32
     c.end_text();
 }
 
-fn fill_rect(c: &mut Content, x: f32, y: f32, w: f32, h: f32, color: (f32, f32, f32)) {
+pub(crate) fn fill_rect(c: &mut Content, x: f32, y: f32, w: f32, h: f32, color: (f32, f32, f32)) {
     c.set_fill_rgb(color.0, color.1, color.2);
     c.rect(x, y, w, h);
     c.fill_nonzero();
 }
 
-fn stroke_rect(c: &mut Content, x: f32, y: f32, w: f32, h: f32, color: (f32, f32, f32), lw: f32) {
+pub(crate) fn stroke_rect(c: &mut Content, x: f32, y: f32, w: f32, h: f32, color: (f32, f32, f32), lw: f32) {
     c.set_stroke_rgb(color.0, color.1, color.2);
     c.set_line_width(lw);
     c.rect(x, y, w, h);
@@ -549,12 +590,12 @@ fn stroke_rect(c: &mut Content, x: f32, y: f32, w: f32, h: f32, color: (f32, f32
 
 /// Rough Helvetica width: an average of 0.56 em per character. Only used to
 /// place short right-aligned or centred labels.
-fn est_width(s: &str, size: f32) -> f32 {
+pub(crate) fn est_width(s: &str, size: f32) -> f32 {
     s.chars().count() as f32 * 0.56 * size
 }
 
 /// Cuts `s` so it fits `max_w`, assuming a wide 0.6 em per character.
-fn fit(s: &str, max_w: f32, size: f32) -> String {
+pub(crate) fn fit(s: &str, max_w: f32, size: f32) -> String {
     let max = (max_w / (0.6 * size)).floor().max(1.0) as usize;
     if s.chars().count() <= max {
         return s.to_string();
@@ -565,7 +606,7 @@ fn fit(s: &str, max_w: f32, size: f32) -> String {
 }
 
 /// Encodes text for the WinAnsi base-font encoding.
-fn winansi(s: &str) -> Vec<u8> {
+pub(crate) fn winansi(s: &str) -> Vec<u8> {
     s.chars()
         .map(|ch| match ch {
             ' '..='~' => ch as u8,
@@ -603,18 +644,18 @@ fn winansi(s: &str) -> Vec<u8> {
         .collect()
 }
 
-fn hex(c: &str) -> (f32, f32, f32) {
+pub(crate) fn hex(c: &str) -> (f32, f32, f32) {
     let v = u32::from_str_radix(c.trim_start_matches('#'), 16).unwrap_or(0x888888);
     (((v >> 16) & 255) as f32 / 255.0, ((v >> 8) & 255) as f32 / 255.0, (v & 255) as f32 / 255.0)
 }
 
 /// The angle colour mixed with white, so outlines and numbers stay readable.
-fn light((r, g, b): (f32, f32, f32)) -> (f32, f32, f32) {
+pub(crate) fn light((r, g, b): (f32, f32, f32)) -> (f32, f32, f32) {
     let k = 0.55;
     (r + (1.0 - r) * k, g + (1.0 - g) * k, b + (1.0 - b) * k)
 }
 
-fn fmt_angle(a: f64) -> String {
+pub(crate) fn fmt_angle(a: f64) -> String {
     if a == 0.0 {
         "0°".into()
     } else if a.fract() == 0.0 {
@@ -625,7 +666,7 @@ fn fmt_angle(a: f64) -> String {
 }
 
 /// A length without trailing zeros: 600, 2.5.
-fn num(v: f64) -> String {
+pub(crate) fn num(v: f64) -> String {
     let s = format!("{v:.2}");
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }

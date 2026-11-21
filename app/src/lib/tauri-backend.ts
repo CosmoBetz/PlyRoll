@@ -4,7 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { listen } from "@tauri-apps/api/event";
 import { open, save, ask } from "@tauri-apps/plugin-dialog";
 import type { Backend } from "./backend";
-import type { AppView, ImportReport, LibraryView, NestDone, NestProgress, NestStarted, SourceFile } from "./types";
+import type { AppView, ImportReport, LibraryView, NestDone, NestProgress, NestStarted, RollsView, SourceFile } from "./types";
 
 type Imported = { view: AppView; report: ImportReport };
 
@@ -31,6 +31,11 @@ export const tauriBackend: Backend = {
   saveMaterial: (original, material) => invoke<LibraryView>("save_material", { original, material }),
   deleteMaterial: (name) => invoke<LibraryView>("delete_material", { name }),
   importMaterials: (path) => invoke<LibraryView>("import_materials", { path }),
+  rolls: () => invoke<RollsView>("get_rolls"),
+  saveRoll: (original, roll) => invoke<RollsView>("save_roll", { original, roll }),
+  deleteRoll: (id) => invoke<RollsView>("delete_roll", { id }),
+  bookRoll: () => invoke<RollsView>("book_roll"),
+  unbookRoll: () => invoke<RollsView>("unbook_roll"),
   startNest: () => invoke<NestStarted>("start_nest"),
   stopNest: () => invoke<void>("stop_nest"),
   async onNest(on) {

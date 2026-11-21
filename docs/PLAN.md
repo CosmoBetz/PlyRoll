@@ -1,6 +1,24 @@
 # PlyRoll — plan for a free, local 2D nesting tool for prepreg plies
 
-Status: revised 2026-11-21. **Phase 1 (CLI) is built. Phase 2 has the orientation editor, material library, job settings, live nesting, saved results, cut-file export, reports and import settings. Phase 3 has kit-by-kit nesting.** See the README for usage.
+Status: revised 2026-11-21. **Phase 1 (CLI) is built. Phase 2 has the orientation editor, material library, job settings, live nesting, saved results, cut-file export, reports and import settings. Phase 3 has kit-by-kit nesting, roll inventory and 1:1 tiled templates.** See the README for usage.
+
+**Phase 3, roll inventory (§5.3):**
+- **Storage:** `rolls.toml` (`[[roll]]`: id, material name, batch, `remaining_m`, optional `expires` YYYY-MM-DD and note, `[[roll.usage]]` bookings), next to the material library in the app, `--rolls` (default next to the job) in the CLI. Same rules as the library: validated on load and save, written through a temporary file, never overwritten when it failed to load. `Material` is unchanged.
+- **Job:** `JobSettings.roll` holds only the roll id; the length left is always read from the inventory. It is not in the result fingerprint, so picking a roll never makes a nest stale. Changing the material drops a roll of another material.
+- **Warnings, not blocks:** the app warns when the nest (live or finished) needs more than the roll has and when the roll is past its use-by date; the CLI prints the same; report.pdf shows them in red.
+- **Booking:** an explicit action after cutting, never a side effect of export. It takes the used length (including lead trim) off the roll and records job, date, length and a result key (fingerprint + seed); the same nest cannot be booked twice, on any roll, and can be taken back. A roll with less left than the nest is refused (correct the length first). Lengths are stored to 0.1 mm. CLI: `plyroll rolls` lists; booking is in the app only.
+- **Report:** roll id, batch, use-by and the length before and after the job on report.pdf; `roll` in report.json; `roll` and `batch` columns appended to labels.csv. A booked nest shows the length before it was booked.
+- **Material renames** in the app rename the material on its rolls (not exercised in the app yet); deleting a material leaves its rolls, flagged in the dialog.
+- **Not done:** remnants, roll width differing from the material's nominal width, out-time tracking. Cutting the same saved nest a second time (a repeat kit) cannot be booked again, since its key is already used: nest again (a new seed) or correct the roll's length by hand.
+- **Checked:** core tests (file round trip, validation incl. duplicate ids and impossible dates, book / double book / too short / take back, rounding, roll info after booking, a roll pick keeps the result fresh, old files load, labels.csv and report.json columns). In the browser preview and in the desktop app: add a roll, use it for the job, nest, export (report.json and labels.csv carry the batch), book (3.00 → 0.72 m in rolls.toml), take back (3.00 m). The live "not enough roll" warning and the expired note were checked in the browser preview; the red report header with the CLI.
+
+**Phase 3, 1:1 templates (§5.6 hand-cutting support):**
+- **Output:** `templates.pdf`, only when asked for (`JobSettings.templates`, the app's *1:1 templates* choice, `--templates a4|a3|letter|roll:<mm>`), and only when verification passes. A cut file not written by an export (templates off, or verification failed) is removed from the folder, so it never holds files of two nests. `plyroll export` writes a saved nest's files without nesting again.
+- **Tiling:** `template::plan_tiles` is pure: the fewest equal tiles of at most the page minus 13 mm margins, overlapping by 10 mm, covering exactly 0..length × 0..width. Sheets are turned whichever way needs fewer pages. Plotter pages are the roll's width and only as long as their tile, split into equal pages over 5 m (PDF viewers stop at 200 in). Tiles without a ply are skipped.
+- **Pages:** an index (instructions and the tile grid; A4 landscape for plotter rolls), then one page per tile, drawn in roll coordinates and clipped, so plies and labels continue across joints. Roll x right, y up, as the DXF and the report: not mirrored. Cut lines flattened to 0.03 mm, marking dashed, fibre arrows, cut numbers and labels, roll edges, trims, cross-cut and kit dividers. Joining: trim a tile's left and top border, lay it on its neighbours' dashed joint line, match the half registration marks. Each page has its name, position, neighbours to lay over, and a 100 mm check line. `/PrintScaling /None` asks the print dialog for actual size.
+- **Report code:** `pdf::Doc` now takes a page size per page and a footer pass, shared by report.pdf and templates.pdf.
+- **Not done:** single-ply templates, a printer-offset calibration, projector mode.
+- **Checked:** tests (coverage, overlap, equal sizes and page limits for A4 / A3 / Letter / 914 and 420 mm rolls over four job sizes; blank tiles skipped and every ply on a printed tile; page count and sizes; written only when asked and verified, and an old one removed). A demo page rendered at 10 px/mm with Ghostscript: page 297.0 × 210.0 mm, the check line 100 mm, an 80 mm doubler 80.0 mm. Tile content matched layout.svg (not mirrored). Exported from the desktop app (37 pages on A4).
 
 **Phase 3, kit-by-kit nesting (§5.4 kit-aware modes):**
 - **Setting:** `JobSettings.grouping` (`global` / `by-kit`), saved with the project (old files load as global), in the app's Nest view and as `plyroll nest --grouping`.
@@ -9,7 +27,7 @@ Status: revised 2026-11-21. **Phase 1 (CLI) is built. Phase 2 has the orientatio
 - **Output:** `Layout.sections` (start/end per kit) is saved with the result and in `report.json`; the PDF layout shows a divider and kit names, the checklist gives each kit's stretch, and the app's roll view shows the dividers live. The cut order needs no change: sections do not overlap along the roll, so each kit's cut numbers are one unbroken run.
 - **Freshness:** the fingerprint includes the grouping only when it is by-kit, so global results saved earlier stay current.
 - **Not done:** groups of N kits per section, and a cross-cut between kits on the cut file.
-- **Checked:** core tests (every variant in exactly one section, merge mapping and refusal, stale on change), solver tests (sections in order and end to end, each kit's cut numbers contiguous, live layouts valid, stop after 150 ms still gives every kit, a job without kits is one section), and CLI runs on the demo (kit A 0.02–1.37 m, B 1.37–2.33 m, about 1–4% longer than mixed). The Nest view toggle was checked in the browser preview; the real app was not driven this time (screen control was not approved).
+- **Checked:** core tests (every variant in exactly one section, merge mapping and refusal, stale on change), solver tests (sections in order and end to end, each kit's cut numbers contiguous, live layouts valid, stop after 150 ms still gives every kit, a job without kits is one section), and CLI runs on the demo (kit A 0.02–1.37 m, B 1.37–2.33 m, about 1–4% longer than mixed). The Nest view toggle was checked in the browser preview, and later in the desktop app: live progress showed kit A, the result a divider between A and B (2326 mm, verified).
 
 **Phase 2, import settings (so a real job never needs the CLI):**
 - **In the app:** units (from each file's `$INSUNITS`, or forced for every file) and join / gap tolerances, stored in the project as before. The dialog lists each DXF with the units it declares. The inspector shows each ply's size in mm.
@@ -21,7 +39,7 @@ Status: revised 2026-11-21. **Phase 1 (CLI) is built. Phase 2 has the orientatio
 - **report.pdf** (A4 landscape, written with `pdf-writer`, base fonts only, nothing embedded): material, used length, both utilisations, scrap, cost, verification, solve time; the layout coloured by angle with cut numbers and a position scale, split into stacked strips for long jobs; then a kit checklist with one tick box per ply, its cut number and position on the roll.
 - **labels.csv:** one row per cut ply for label printers (ZPL stays P2).
 - **One cut number everywhere:** `plies.csv` order, `labels.csv`, and the report all use `export::cut_order`.
-- **Differences from §5.7:** no roll or batch on the report (roll inventory is Phase 3); the checklist is in project order (kit, shape, angle) because the model has no layup sequence yet. Like the cut files, the report and labels are only written when verification passes. The date is UTC.
+- **Differences from §5.7:** the checklist is in project order (kit, shape, angle) because the model has no layup sequence yet. Like the cut files, the report and labels are only written when verification passes. The date is UTC.
 - **Checked:** unit tests for the checklist (every ply once, kits in order, no-kit last), labels.csv against plies.csv, and no report on a failed layout. Reports for the demo (2 pages) and a 5-set job (11.5 m, 220 plies, 4 pages) were read page by page; Ghostscript parses them without errors.
 
 **Phase 2, second part (material library, nesting, results):**
@@ -48,7 +66,7 @@ Status: revised 2026-11-21. **Phase 1 (CLI) is built. Phase 2 has the orientatio
 - **Solver versions:** sparrow is pinned to git commit `b8ef033`, because it is not on crates.io. It already uses jagua-rs 2.0.0, not 1.0.0 as its README says.
 - **Edge spacing:** jagua-rs keeps items one full `spacing` away from the strip boundary. The adapter compensates, so plies may touch the trim lines.
 - **Rotations:** solver rotations (f32) are snapped back to the exact allowed angle around the part's centre.
-- **Not done yet:** a true-size PDF of the layout (the SVG prints at true size), identical-outline merging across files, and handles on DXF table headers. ezdxf reads the files and adds the missing handles itself.
+- **Not done yet:** identical-outline merging across files, and handles on DXF table headers. ezdxf reads the files and adds the missing handles itself.
 - **Checked:** 23 tests pass (geometry, importer, orientation rules, verifier, nest → DXF → re-import round trip). On the demo job (44 plies, 600 mm roll, 30 s): UD 2324 mm / 75.8%; twill with warp/weft swap 2271 mm / 77.6%.
 
 **Decided so far:**

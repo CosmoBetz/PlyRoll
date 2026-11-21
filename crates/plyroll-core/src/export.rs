@@ -80,7 +80,7 @@ pub fn cut_order(plies: &[PlyShape], layout: &Layout) -> Vec<usize> {
 }
 
 /// Fibre-direction line through the label point, sized to the part.
-fn fibre_line(l: &Label) -> Option<(Pt, Pt)> {
+pub(crate) fn fibre_line(l: &Label) -> Option<(Pt, Pt)> {
     let half = (l.room * 0.8).min(30.0);
     if half < 3.0 {
         return None;

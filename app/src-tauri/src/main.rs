@@ -11,7 +11,8 @@
 use plyroll_core::job::{load_materials, save_materials};
 use plyroll_core::model::{Material, Variant};
 use plyroll_core::project::{ImportReport, ImportSettings, JobSettings, NestResult, Project, RefPick, SourceFile};
-use plyroll_core::report::{ReportMeta, RunInfo, write_outputs};
+use plyroll_core::report::{OutputOptions, ReportMeta, RunInfo, now_utc, today_utc, write_outputs};
+use plyroll_core::rolls::{Roll, RollInfo, Usage, load_rolls, result_key, save_rolls};
 use plyroll_core::view::{LayoutShapes, PlacementView, PlyView, ResultView, layout_shapes, placement_views, project_view, result_view};
 use plyroll_core::kits::LayoutSection;
 use plyroll_nest::{NestOptions, nest_job};
@@ -130,6 +131,53 @@ fn library_view(lib: &Library) -> LibraryView {
     LibraryView { path: lib.path.display().to_string(), materials: lib.materials.clone(), error: lib.error.clone() }
 }
 
+/// The roll inventory, `rolls.toml` next to the material library.
+struct Inventory {
+    path: PathBuf,
+    rolls: Vec<Roll>,
+    /// The file exists but could not be read; saving is refused so it is not overwritten.
+    error: Option<String>,
+}
+
+impl Inventory {
+    fn load(path: PathBuf) -> Self {
+        if !path.exists() {
+            return Inventory { path, rolls: Vec::new(), error: None };
+        }
+        match load_rolls(&path) {
+            Ok(rolls) => Inventory { path, rolls, error: None },
+            Err(e) => Inventory { path, rolls: Vec::new(), error: Some(format!("{e:#}")) },
+        }
+    }
+
+    /// Saves a changed list; the inventory is only replaced when the file was written.
+    fn save(&mut self, rolls: Vec<Roll>) -> anyhow::Result<()> {
+        if let Some(e) = &self.error {
+            anyhow::bail!("the roll inventory could not be read, so it is not overwritten. Fix or remove {}.\n{e}", self.path.display());
+        }
+        save_rolls(&self.path, &rolls)?;
+        self.rolls = rolls;
+        Ok(())
+    }
+
+    fn find(&self, id: &str) -> Option<&Roll> {
+        self.rolls.iter().find(|r| r.id == id)
+    }
+}
+
+#[derive(Serialize)]
+struct RollsView {
+    path: String,
+    rolls: Vec<Roll>,
+    error: Option<String>,
+    /// Today, YYYY-MM-DD, for expiry.
+    today: String,
+}
+
+fn rolls_view(inv: &Inventory) -> RollsView {
+    RollsView { path: inv.path.display().to_string(), rolls: inv.rolls.clone(), error: inv.error.clone(), today: today_utc() }
+}
+
 #[derive(Serialize)]
 struct Readiness {
     ok: bool,
@@ -162,6 +210,7 @@ struct ImportResult {
 
 type Shared<'a> = State<'a, Mutex<AppState>>;
 type SharedLib<'a> = State<'a, Mutex<Library>>;
+type SharedInv<'a> = State<'a, Mutex<Inventory>>;
 type CmdResult<T> = Result<T, String>;
 
 fn err(e: anyhow::Error) -> String {
@@ -361,7 +410,7 @@ fn get_library(lib: SharedLib) -> LibraryView {
 
 /// Adds or replaces a material. `original` is its name before an edit.
 #[tauri::command]
-fn save_material(original: Option<String>, material: Material, lib: SharedLib) -> CmdResult<LibraryView> {
+fn save_material(original: Option<String>, material: Material, lib: SharedLib, inv: SharedInv) -> CmdResult<LibraryView> {
     let mut lib = lib.lock().unwrap();
     let mut list = lib.materials.clone();
     let name = material.name.trim().to_string();
@@ -375,6 +424,16 @@ fn save_material(original: Option<String>, material: Material, lib: SharedLib) -
         None => list.push(material),
     }
     lib.materials = lib.save(list).map_err(err)?;
+    // A renamed material keeps its rolls.
+    if let Some(old) = original.filter(|o| *o != name) {
+        let mut inv = inv.lock().unwrap();
+        if inv.rolls.iter().any(|r| r.material == old) {
+            let rolls = inv.rolls.iter().cloned().map(|r| if r.material == old { Roll { material: name.clone(), ..r } } else { r }).collect();
+            if let Err(e) = inv.save(rolls) {
+                return Err(format!("the material was renamed, but its rolls still name '{old}': {}", err(e)));
+            }
+        }
+    }
     Ok(library_view(&lib))
 }
 
@@ -400,6 +459,93 @@ fn import_materials(path: String, lib: SharedLib) -> CmdResult<LibraryView> {
     }
     lib.materials = lib.save(list).map_err(err)?;
     Ok(library_view(&lib))
+}
+
+// ---- roll inventory ---------------------------------------------------------
+
+#[tauri::command]
+fn get_rolls(inv: SharedInv) -> RollsView {
+    rolls_view(&inv.lock().unwrap())
+}
+
+/// Adds or replaces a roll. `original` is its id before an edit. Its usage
+/// history is kept from the inventory, never taken from the UI.
+#[tauri::command]
+fn save_roll(original: Option<String>, roll: Roll, inv: SharedInv) -> CmdResult<RollsView> {
+    let mut inv = inv.lock().unwrap();
+    let mut list = inv.rolls.clone();
+    let roll = Roll { id: roll.id.trim().to_string(), material: roll.material.trim().to_string(), batch: roll.batch.trim().to_string(), ..roll };
+    let pos = original.as_deref().and_then(|o| list.iter().position(|r| r.id == o));
+    if list.iter().enumerate().any(|(i, r)| Some(i) != pos && r.id.eq_ignore_ascii_case(&roll.id)) {
+        return Err(format!("a roll with the id '{}' already exists", roll.id));
+    }
+    match pos {
+        Some(i) => {
+            let usage = std::mem::take(&mut list[i].usage);
+            list[i] = Roll { usage, ..roll };
+        }
+        None => list.push(Roll { usage: Vec::new(), ..roll }),
+    }
+    inv.save(list).map_err(err)?;
+    Ok(rolls_view(&inv))
+}
+
+#[tauri::command]
+fn delete_roll(id: String, inv: SharedInv) -> CmdResult<RollsView> {
+    let mut inv = inv.lock().unwrap();
+    let list = inv.rolls.iter().filter(|r| r.id != id).cloned().collect();
+    inv.save(list).map_err(err)?;
+    Ok(rolls_view(&inv))
+}
+
+/// The job's roll, checked against the result's material.
+fn job_roll<'a>(st: &AppState, inv: &'a Inventory, material: &str) -> CmdResult<Option<&'a Roll>> {
+    let Some(id) = &st.project.job.roll else { return Ok(None) };
+    let roll = inv.find(id).ok_or_else(|| format!("roll '{id}' is not in the inventory. Pick another roll, or none."))?;
+    if roll.material != material {
+        return Err(format!("roll '{id}' is {}, but the nest is on {material}. Pick a roll of {material}.", roll.material));
+    }
+    Ok(Some(roll))
+}
+
+fn job_name(st: &AppState) -> String {
+    st.path.as_ref().and_then(|p| p.file_stem()).map_or_else(|| "Untitled".to_string(), |s| s.to_string_lossy().into_owned())
+}
+
+/// Takes the current nest's used length off the job's roll.
+#[tauri::command]
+fn book_roll(state: Shared, inv: SharedInv) -> CmdResult<RollsView> {
+    let st = state.lock().unwrap();
+    let r = st.result.as_ref().ok_or("nothing nested yet")?;
+    let f = st.project.check_result(r);
+    if !f.fresh {
+        return Err(format!("the nest is out of date ({}). Nest again before booking it.", f.reason.unwrap_or_default()));
+    }
+    if !r.summary.verification.ok {
+        return Err("the nest failed verification, so it cannot be cut or booked".into());
+    }
+    let mut inv = inv.lock().unwrap();
+    let roll = job_roll(&st, &inv, &r.layout.material.name)?.ok_or("pick the roll the job is cut from first")?;
+    let id = roll.id.clone();
+    let usage = Usage { job: job_name(&st), date: now_utc(), length_m: r.layout.used_length / 1000.0, result: result_key(&r.fingerprint, r.run.seed) };
+    let mut list = inv.rolls.clone();
+    plyroll_core::rolls::book(&mut list, &id, usage).map_err(err)?;
+    inv.save(list).map_err(err)?;
+    Ok(rolls_view(&inv))
+}
+
+/// Takes the current nest's booking back onto its roll.
+#[tauri::command]
+fn unbook_roll(state: Shared, inv: SharedInv) -> CmdResult<RollsView> {
+    let st = state.lock().unwrap();
+    let r = st.result.as_ref().ok_or("nothing nested yet")?;
+    let key = result_key(&r.fingerprint, r.run.seed);
+    let mut inv = inv.lock().unwrap();
+    let id = inv.rolls.iter().find(|x| x.booking(&key).is_some()).map(|x| x.id.clone()).ok_or("this nest is not booked on any roll")?;
+    let mut list = inv.rolls.clone();
+    plyroll_core::rolls::unbook(&mut list, &id, &key).map_err(err)?;
+    inv.save(list).map_err(err)?;
+    Ok(rolls_view(&inv))
 }
 
 // ---- nesting ----------------------------------------------------------------
@@ -539,7 +685,7 @@ fn stop_nest(state: Shared) {
 
 /// Writes the cut files of the current result into `dir`.
 #[tauri::command]
-fn export_result(dir: String, state: Shared) -> CmdResult<Vec<String>> {
+fn export_result(dir: String, state: Shared, inv: SharedInv) -> CmdResult<Vec<String>> {
     let st = state.lock().unwrap();
     let r = st.result.as_ref().ok_or("nothing nested yet")?;
     let f = st.project.check_result(r);
@@ -549,8 +695,11 @@ fn export_result(dir: String, state: Shared) -> CmdResult<Vec<String>> {
     if !r.summary.verification.ok {
         return Err(format!("the nest failed verification, so no cut files are written:\n{}", r.summary.verification.issues.join("\n")));
     }
-    let job = st.path.as_ref().and_then(|p| p.file_stem()).map_or_else(|| "Untitled".to_string(), |s| s.to_string_lossy().into_owned());
-    let files = write_outputs(&PathBuf::from(dir), &r.plies, &r.layout, &r.summary, &r.run, &r.warnings, &ReportMeta::new(job)).map_err(err)?;
+    let inv = inv.lock().unwrap();
+    let roll = job_roll(&st, &inv, &r.layout.material.name)?.map(|x| RollInfo::of(x, &result_key(&r.fingerprint, r.run.seed), &today_utc()));
+    let meta = ReportMeta::new(job_name(&st)).with_roll(roll);
+    let opts = OutputOptions { templates: st.project.job.templates };
+    let files = write_outputs(&PathBuf::from(dir), &r.plies, &r.layout, &r.summary, &r.run, &r.warnings, &meta, &opts).map_err(err)?;
     Ok(files.iter().map(|p| p.display().to_string()).collect())
 }
 
@@ -564,7 +713,9 @@ fn main() {
         .setup(|app| {
             app.manage(Mutex::new(AppState::fresh()));
             let lib_path = app.path().app_config_dir().map(|d| d.join("materials.toml")).unwrap_or_else(|_| PathBuf::from("materials.toml"));
+            let rolls_path = lib_path.with_file_name("rolls.toml");
             app.manage(Mutex::new(Library::load(lib_path)));
+            app.manage(Mutex::new(Inventory::load(rolls_path)));
             // `plyroll-app path/to/project.plyroll` opens it on start.
             if let Some(arg) = std::env::args().nth(1).filter(|a| a.ends_with(".plyroll")) {
                 let path = PathBuf::from(&arg);
@@ -600,6 +751,11 @@ fn main() {
             save_material,
             delete_material,
             import_materials,
+            get_rolls,
+            save_roll,
+            delete_roll,
+            book_roll,
+            unbook_roll,
             start_nest,
             stop_nest,
             export_result,

@@ -177,6 +177,8 @@ pub struct ResultView {
     pub placements: Vec<PlacementView>,
     /// Kit sections along the roll (kit-by-kit nests only).
     pub sections: Vec<crate::kits::LayoutSection>,
+    /// Identifies this nest in roll bookings (`rolls::result_key`).
+    pub key: String,
 }
 
 pub fn result_view(project: &Project, r: &crate::project::NestResult) -> ResultView {
@@ -191,5 +193,6 @@ pub fn result_view(project: &Project, r: &crate::project::NestResult) -> ResultV
         shapes: layout_shapes(&r.plies, &r.layout.material),
         placements: placement_views(&r.plies, &r.layout),
         sections: r.layout.sections.clone(),
+        key: crate::rolls::result_key(&r.fingerprint, r.run.seed),
     }
 }

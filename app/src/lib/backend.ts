@@ -2,7 +2,7 @@
 // implementation calls Rust commands; the mock lets the editor run in a
 // plain browser (npm run dev) with real demo data.
 
-import type { AppView, ImportReport, ImportSettings, JobSettings, LibraryView, Material, NestDone, NestProgress, NestStarted, RefPick, SourceFile, Variant } from "./types";
+import type { AppView, ImportReport, ImportSettings, JobSettings, LibraryView, Material, NestDone, NestProgress, NestStarted, RefPick, Roll, RollsView, SourceFile, Variant } from "./types";
 
 export interface Backend {
   readonly kind: "tauri" | "mock";
@@ -31,6 +31,15 @@ export interface Backend {
   saveMaterial(original: string | null, m: Material): Promise<LibraryView>;
   deleteMaterial(name: string): Promise<LibraryView>;
   importMaterials(path: string): Promise<LibraryView>;
+  // Roll inventory (rolls.toml next to the material library)
+  rolls(): Promise<RollsView>;
+  /** Adds or replaces; `original` is the id before editing. Usage history is kept by the backend. */
+  saveRoll(original: string | null, r: Roll): Promise<RollsView>;
+  deleteRoll(id: string): Promise<RollsView>;
+  /** Takes the current nest's used length off the job's roll. */
+  bookRoll(): Promise<RollsView>;
+  /** Puts the current nest's booking back on its roll. */
+  unbookRoll(): Promise<RollsView>;
   // Nesting
   startNest(): Promise<NestStarted>;
   stopNest(): Promise<void>;

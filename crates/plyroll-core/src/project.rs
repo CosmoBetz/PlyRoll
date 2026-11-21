@@ -227,11 +227,18 @@ pub struct JobSettings {
     pub sets: u32,
     /// All plies mixed, or one section of roll per kit.
     pub grouping: Grouping,
+    /// Id of the roll in the inventory the job is cut from. Not part of the
+    /// result fingerprint: picking a roll does not change the layout.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roll: Option<String>,
+    /// Also export 1:1 templates on this paper.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub templates: Option<crate::template::Paper>,
 }
 
 impl Default for JobSettings {
     fn default() -> Self {
-        Self { material: None, time_s: 60, sets: 1, grouping: Grouping::Global }
+        Self { material: None, time_s: 60, sets: 1, grouping: Grouping::Global, roll: None, templates: None }
     }
 }
 
@@ -723,6 +730,12 @@ impl Project {
         }
         if let Some(m) = &job.material {
             validate_material(m)?;
+        }
+        if let Some(p) = &job.templates {
+            p.validate()?;
+        }
+        if job.roll.as_deref().is_some_and(|r| r.trim().is_empty()) {
+            bail!("a roll id must not be empty");
         }
         self.job = job;
         Ok(())

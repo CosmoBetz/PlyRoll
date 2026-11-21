@@ -3,7 +3,7 @@
 Free, local nesting for carbon-fibre prepreg plies on an endless roll.
 Every ply keeps its fibre direction (UD) or warp direction (twill); plies are never flipped.
 
-Status: **Phase 1 command-line tool; Phase 2 desktop app with orientation editor, material library, nesting and reports; Phase 3 started (kit-by-kit nesting).** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
+Status: **Phase 1 command-line tool; Phase 2 desktop app with orientation editor, material library, nesting and reports; Phase 3 started (kit-by-kit nesting, roll inventory, 1:1 printable templates).** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
 Nesting is done by [sparrow](https://github.com/JeroenGar/sparrow) on top of
 [jagua-rs](https://github.com/JeroenGar/jagua-rs).
 
@@ -75,11 +75,19 @@ Nesting:
    roll, one after another, so a kit's plies are cut together and get consecutive cut numbers. Kits come in project
    order (the order they first appear in the ply list); plies without a kit come last. With several sets, a kit's
    stretch holds all its sets. The time is shared between kits by ply area. It usually costs a little roll length.
+   **Roll** (optional): pick the roll the job is cut from. Its batch goes on the report and labels, and the app warns
+   when the nest needs more length than the roll has, already while it runs. **Manage rolls…** keeps the inventory:
+   id, material, batch, length left, use-by date and a note, in `rolls.toml` next to the material library.
 3. **Nest.** The roll view shows the best layout so far, with fibre hatching per ply (zoom in) and the used length.
    **Stop and keep best** ends early and keeps a complete, verified layout.
-4. The result is saved with the project. Changing plies, quantities, sets or material marks it *out of date*.
+4. The result is saved with the project. Changing plies, quantities, sets, material or layout marks it *out of date*
+   (picking a roll or template paper does not).
    Export is then disabled until you nest again. Undo brings it back.
-5. **Export cut files…** writes the same files as the CLI (see [Output](#output)) to a folder you pick.
+5. **Export cut files…** writes the same files as the CLI (see [Output](#output)) to a folder you pick. Choose
+   **1:1 templates** (A4, A3, Letter or a plotter roll width) to also get `templates.pdf`.
+6. Once the job is cut, **Book … m on roll …** takes the used length off the roll in the inventory. Each nest can be
+   booked once, and **Take back** undoes it. To book a second cut of the same saved nest, nest again or correct the
+   roll's length in **Manage rolls…**.
 
 Or nest the saved project from the command line. It uses the project's material, time, sets and layout
 (`--grouping global|by-kit` overrides the layout, and works for job CSVs too):
@@ -87,6 +95,10 @@ Or nest the saved project from the command line. It uses the project's material,
 ```bash
 ./target/release/plyroll nest my-job.plyroll -o out/my-job
 ```
+
+`plyroll export my-job.plyroll -o out/my-job` writes the files of the nest saved in the project without nesting again
+(refused if it is out of date). Both commands take `--templates a4|a3|letter|roll:<mm>` and `--roll <id>` (with
+`--rolls <file>`, default `rolls.toml` next to the job), and default to the project's choices.
 
 **Reload DXFs** re-reads every file. 0° references are kept, and parts whose outline changed are flagged for a check.
 **Import settings…** sets the units (from each file's `$INSUNITS`, or forced to mm / cm / m / inch for every file) and
@@ -147,6 +159,22 @@ Allowed placement rotations:
 - **UD and default twill:** fibre/warp along the roll, turned by 0° or 180°.
 - **Twill with `warp_weft_interchangeable`:** also 90° and 270°. Plies marked `cosmetic` keep the strict rule.
 
+## Rolls (TOML)
+
+```toml
+[[roll]]
+id = "R-101"              # the label on the roll
+material = "UD-T700-150"  # a material name from the library
+batch = "B2311-07"
+remaining_m = 24.5        # length left, metres
+expires = "2027-05-31"    # optional use-by date
+note = "freezer 2"        # optional
+```
+
+`plyroll rolls examples/demo/rolls.toml` lists an inventory. The app keeps its own next to its material library
+(`~/Library/Application Support/org.plyroll.desktop/rolls.toml` on macOS) and adds `[[roll.usage]]` entries when a nest
+is booked. Renaming a material in the app renames it on its rolls too.
+
 ## Output
 
 | file | content |
@@ -155,7 +183,8 @@ Allowed placement rotations:
 | `layout.svg` | preview, true size in mm |
 | `plies.csv` | every cut ply in cutting order with position, rotation, kit and source |
 | `report.pdf` | nest report (A4 landscape): material, length, utilisation, scrap, cost, verification, the layout with cut numbers and a position scale, then a kit checklist with a tick box per ply, its cut number and its position on the roll |
-| `labels.csv` | one row per cut ply for label printers: cut number, label text, shape, angle, copy *n of m*, kit, material, job, position |
+| `labels.csv` | one row per cut ply for label printers: cut number, label text, shape, angle, copy *n of m*, kit, material, job, position, roll, batch |
+| `templates.pdf` | only when asked for: the layout at true size, tiled over A4 / A3 / Letter sheets or plotter-roll pages (see below) |
 | `report.json` | length, utilisation, cost, verification result, full layout |
 | `orientation.svg` | 0° axes and fibre directions before nesting |
 
@@ -163,7 +192,19 @@ Roll coordinates: x along the roll from its start, y across it from one edge.
 
 Every layout is re-checked with the exact geometry before any cut file is written:
 quantities, fibre direction, no part outside the trims, spacing between parts.
-If a check fails, only `layout.svg` and `report.json` are written and the exit code is 2.
+If a check fails, only `layout.svg` and `report.json` are written and the exit code is 2. Cut files from an earlier
+export into the same folder that were not written this time are removed, so a folder never mixes two nests.
+
+With a roll picked, the report shows its id, batch, use-by date and the length before and after the job, in red when
+the roll is too short or expired; `report.json` has a `roll` entry.
+
+**templates.pdf** is for cutting by hand. The first page is an index with the tile grid and how to join the pages;
+every other page is one tile of the roll at 1:1, named by row (A at the far roll edge) and column (1 at the roll
+start). Print at 100% ("Actual size"; the file asks for it) and measure the 100 mm line on any page. Tiles overlap by
+10 mm: trim each tile along its left and top border, lay it over its neighbours so the edge is on their dashed joint
+line and the half registration marks meet, and tape. Pages show cut lines, marking, the fibre arrow, the cut number
+and the label. Tiles without a ply are not printed. Sheets are turned whichever way needs fewer pages; plotter pages
+are at most 5 m long.
 
 Kit by kit, the report's layout shows a divider and the kit name where each kit starts, the checklist headings give
 each kit's stretch of roll, and `report.json` lists the sections.
@@ -183,7 +224,7 @@ are ignored.
 ## Known limits
 
 - No manual editing of a layout, and no warm start from a previous result.
-- No true-size PDF of the layout (for printing templates) yet. The SVG prints at true size.
+- Templates are of the whole layout; there are no single-ply templates.
 - Parts are not nested inside other parts' holes.
 - DXF table headers have no handles (a quirk of the `dxf` crate writer). ezdxf and PlyRoll read the files fine.
   Check that your cutter software does too.

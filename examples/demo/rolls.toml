@@ -1,0 +1,22 @@
+# PlyRoll roll inventory. remaining_m in metres, expires as YYYY-MM-DD.
+
+[[roll]]
+id = "R-101"
+material = "UD-T700-150"
+batch = "B2311-07"
+remaining_m = 24.5
+expires = "2027-05-31"
+
+[[roll]]
+id = "R-102"
+material = "UD-T700-150"
+batch = "B2311-07"
+remaining_m = 1.2
+expires = "2027-05-31"
+note = "end of roll"
+
+[[roll]]
+id = "T-12"
+material = "Twill-200"
+batch = "TW-4471"
+remaining_m = 40.0

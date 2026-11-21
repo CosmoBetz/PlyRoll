@@ -89,11 +89,47 @@ export interface Material {
 /** "global": all plies mixed; "by-kit": one section of roll per kit, one after another. */
 export type Grouping = "global" | "by-kit";
 
+/** Paper for the 1:1 templates (templates.pdf). */
+export type Paper = { kind: "a4" } | { kind: "a3" } | { kind: "letter" } | { kind: "roll"; width_mm: number };
+
 export interface JobSettings {
   material: Material | null;
   time_s: number;
   sets: number;
   grouping: Grouping;
+  /** Id of the inventory roll the job is cut from (absent = none). */
+  roll?: string | null;
+  /** Also export templates.pdf on this paper (absent = no templates). */
+  templates?: Paper | null;
+}
+
+/** One nest booked on a roll (plyroll-core rolls.rs). */
+export interface Usage {
+  job: string;
+  date: string;
+  length_m: number;
+  /** ResultView.key of the nest. */
+  result: string;
+}
+
+export interface Roll {
+  id: string;
+  /** Material name in the library. */
+  material: string;
+  batch: string;
+  remaining_m: number;
+  /** YYYY-MM-DD */
+  expires?: string | null;
+  note?: string;
+  usage?: Usage[];
+}
+
+export interface RollsView {
+  path: string;
+  rolls: Roll[];
+  error: string | null;
+  /** YYYY-MM-DD, for expiry. */
+  today: string;
 }
 
 /** One kit's stretch of roll in a kit-by-kit nest, roll x in mm. */
@@ -176,6 +212,8 @@ export interface ResultView {
   placements: Placement[];
   /** Kit sections along the roll (kit-by-kit nests only). */
   sections: LayoutSection[];
+  /** Identifies this nest in roll bookings. */
+  key: string;
 }
 
 export interface NestStarted {

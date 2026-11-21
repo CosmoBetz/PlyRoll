@@ -3,7 +3,7 @@
 // geometry rules are simplified and nothing is saved.
 
 import type { Backend } from "./backend";
-import type { AppView, ImportSettings, JobSettings, LayoutShapes, Material, NestDone, NestProgress, Placement, Ply, RefOrigin, RefPick, ResultView } from "./types";
+import type { AppView, ImportSettings, JobSettings, LayoutShapes, Material, NestDone, NestProgress, Placement, Ply, RefOrigin, RefPick, ResultView, Roll, RollsView } from "./types";
 import { longestEdge, normAxis, totalQty } from "./geo";
 import demo from "../mock/demo-view.json";
 
@@ -12,6 +12,14 @@ const DEMO_MATERIALS: Material[] = [
   { name: "UD-T700-150", kind: "ud", roll_width: 600, edge_trim: 10, lead_trim: 20, spacing: 2, angle_tolerance: 0, tolerance_step: 0.5, warp_weft_interchangeable: false, cost_per_m2: 45 },
   { name: "Twill-200", kind: "twill", roll_width: 600, edge_trim: 10, lead_trim: 20, spacing: 2, angle_tolerance: 0, tolerance_step: 0.5, warp_weft_interchangeable: false, cost_per_m2: 38 },
   { name: "Twill-200-swap", kind: "twill", roll_width: 600, edge_trim: 10, lead_trim: 20, spacing: 2, angle_tolerance: 0, tolerance_step: 0.5, warp_weft_interchangeable: true, cost_per_m2: null },
+];
+
+// A small demo inventory.
+const DEMO_ROLLS: Roll[] = [
+  { id: "R-101", material: "UD-T700-150", batch: "B2311-07", remaining_m: 24.5, expires: "2027-05-31" },
+  { id: "R-102", material: "UD-T700-150", batch: "B2311-07", remaining_m: 1.2, expires: "2027-05-31", note: "end of roll" },
+  { id: "R-087", material: "UD-T700-150", batch: "B2306-02", remaining_m: 12.0, expires: "2026-10-31" },
+  { id: "T-12", material: "Twill-200", batch: "TW-4471", remaining_m: 40.0 },
 ];
 
 type Snapshot = { plies: Ply[]; job: JobSettings };
@@ -66,12 +74,16 @@ export function createMockBackend(): Backend {
   let redo: Snapshot[] = [];
   let dirty = false;
   let library: Material[] = structuredClone(DEMO_MATERIALS);
-  let result: (Omit<ResultView, "fresh" | "stale_reason"> & { key: string }) | null = null;
+  let result: Omit<ResultView, "fresh" | "stale_reason"> | null = null;
+  let rolls: Roll[] = structuredClone(DEMO_ROLLS);
+  const today = new Date().toISOString().slice(0, 10);
+  const rollsView = (): RollsView => ({ path: "(browser mock)", rolls: structuredClone(rolls), error: null, today });
   let running: { id: number; stop: () => void } | null = null;
   let runSeq = 0;
   const listeners: { progress: (p: NestProgress) => void; done: (d: NestDone) => void }[] = [];
 
-  const inputKey = () => JSON.stringify([plies.map((p) => [p.id, p.ref_deg, p.status, p.variants, p.mirrored]), job]);
+  // Roll and template paper do not change the layout, so they are left out.
+  const inputKey = () => JSON.stringify([plies.map((p) => [p.id, p.ref_deg, p.status, p.variants, p.mirrored]), job.material, job.sets, job.grouping]);
   const blockedMsg = () => {
     const blocked = plies.filter((p) => p.total_qty > 0 && p.status !== "ok");
     return blocked.length ? "set the 0° reference before nesting:\n  " + blocked.map((p) => p.name).join("\n  ") : null;
@@ -260,6 +272,46 @@ export function createMockBackend(): Backend {
       return { path: "(browser mock)", materials: structuredClone(library), error: null };
     },
     importMaterials: () => Promise.reject("importing a file needs the desktop app"),
+    rolls: async () => rollsView(),
+    saveRoll: async (original, r) => {
+      if (!r.id.trim()) throw "a roll needs an id";
+      if (!r.material.trim()) throw `roll '${r.id}': it needs a material`;
+      if (!(r.remaining_m >= 0)) throw `roll '${r.id}': the remaining length must be between 0 and 100000 m`;
+      if (r.expires && !/^\d{4}-\d{2}-\d{2}$/.test(r.expires)) throw `roll '${r.id}': the expiry date must be written YYYY-MM-DD`;
+      const i = original == null ? -1 : rolls.findIndex((x) => x.id === original);
+      if (rolls.some((x, k) => k !== i && x.id.toLowerCase() === r.id.trim().toLowerCase())) throw `a roll with the id '${r.id}' already exists`;
+      const next: Roll = { ...structuredClone(r), id: r.id.trim(), usage: i >= 0 ? rolls[i].usage : [] };
+      if (i >= 0) rolls[i] = next;
+      else rolls.push(next);
+      return rollsView();
+    },
+    deleteRoll: async (id) => {
+      rolls = rolls.filter((r) => r.id !== id);
+      return rollsView();
+    },
+    bookRoll: async () => {
+      if (!result) throw "nothing nested yet";
+      if (result.key !== inputKey()) throw "the nest is out of date. Nest again before booking it.";
+      const r = rolls.find((x) => x.id === job.roll);
+      if (!r) throw "pick the roll the job is cut from first";
+      const key = result.key;
+      const other = rolls.find((x) => x.usage?.some((u) => u.result === key));
+      if (other) throw `this nest is already booked on roll '${other.id}'`;
+      const m = result.used_length / 1000;
+      if (m > r.remaining_m) throw `roll '${r.id}' has ${r.remaining_m.toFixed(2)} m left, the nest needs ${m.toFixed(2)} m. Correct the roll's remaining length first if it is wrong.`;
+      r.remaining_m -= m;
+      r.usage = [...(r.usage ?? []), { job: "Untitled", date: new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC", length_m: m, result: key }];
+      return rollsView();
+    },
+    unbookRoll: async () => {
+      const key = result?.key;
+      const r = rolls.find((x) => x.usage?.some((u) => u.result === key));
+      if (!r) throw "this nest is not booked on any roll";
+      const u = r.usage!.find((x) => x.result === key)!;
+      r.usage = r.usage!.filter((x) => x !== u);
+      r.remaining_m += u.length_m;
+      return rollsView();
+    },
     startNest: async () => {
       if (running) throw "a nest is already running";
       const b = blockedMsg();

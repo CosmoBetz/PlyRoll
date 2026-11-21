@@ -12,7 +12,9 @@ use plyroll_core::import::{ImportOptions, UnitsOverride, import_dxf};
 use plyroll_core::job::{load_job, load_materials, read_job_csv};
 use plyroll_core::model::{Material, PlyShape};
 use plyroll_core::project::{self, Project};
-use plyroll_core::report::{ReportMeta, RunInfo, summarize, write_outputs};
+use plyroll_core::report::{OutputOptions, ReportMeta, RunInfo, summarize, today_utc, write_outputs};
+use plyroll_core::rolls::{RollInfo, load_rolls, result_key};
+use plyroll_core::template::Paper;
 use plyroll_core::kits::{self, Grouping};
 use plyroll_nest::{NestOptions, nest_job};
 
@@ -96,6 +98,36 @@ struct JobArgs {
     import: ImportArgs,
 }
 
+/// Options shared by `nest` and `export` for the extra outputs.
+#[derive(clap::Args, Clone)]
+struct OutArgs {
+    /// Also write templates.pdf: the layout at true size, tiled over pages.
+    /// a4, a3, letter, or roll:<width mm> for a plotter roll. Default: the project's setting.
+    #[arg(long, value_parser = parse_paper)]
+    templates: Option<Paper>,
+    /// Roll from the inventory to cut from (its id); its batch goes on the
+    /// report and labels. Default: the project's roll.
+    #[arg(long)]
+    roll: Option<String>,
+    /// Roll inventory (TOML). Default: rolls.toml next to the job file.
+    #[arg(long)]
+    rolls: Option<PathBuf>,
+}
+
+fn parse_paper(s: &str) -> Result<Paper, String> {
+    let p = match s.to_ascii_lowercase().as_str() {
+        "a4" => Paper::A4,
+        "a3" => Paper::A3,
+        "letter" => Paper::Letter,
+        other => match other.strip_prefix("roll:") {
+            Some(w) => Paper::Roll { width_mm: w.trim().parse().map_err(|_| format!("'{w}' is not a width in mm"))? },
+            None => return Err("use a4, a3, letter or roll:<width mm>".into()),
+        },
+    };
+    p.validate().map_err(|e| e.to_string())?;
+    Ok(p)
+}
+
 #[derive(Subcommand)]
 enum Cmd {
     /// Nest a job and write the cut files (layout.dxf, plies.csv, labels.csv), report.pdf,
@@ -122,6 +154,24 @@ enum Cmd {
         /// section of roll, one after another. Default: the project's setting, else global.
         #[arg(long, value_enum)]
         grouping: Option<GroupingArg>,
+        #[command(flatten)]
+        extra: OutArgs,
+    },
+    /// Write the files of the nest saved in a .plyroll project, without nesting again.
+    Export {
+        /// The project.
+        project: PathBuf,
+        /// Output folder.
+        #[arg(long, short, default_value = "out")]
+        out: PathBuf,
+        #[command(flatten)]
+        extra: OutArgs,
+    },
+    /// List the rolls in the inventory.
+    Rolls {
+        /// Roll inventory (TOML).
+        #[arg(default_value = "rolls.toml")]
+        file: PathBuf,
     },
     /// Import a job and write orientation.svg (0° axes and fibre directions) without nesting.
     Check {
@@ -183,7 +233,39 @@ fn run() -> Result<i32> {
             println!("\nwrote {}", job.out.join("orientation.svg").display());
             Ok(0)
         }
-        Cmd::Nest { job, time, seed, workers, early_stop, dump_instance, grouping } => {
+        Cmd::Rolls { file } => {
+            let rolls = load_rolls(&file)?;
+            let today = today_utc();
+            println!("{:<12} {:<22} {:<14} {:>10}  {:<12} booked", "roll", "material", "batch", "left m", "use by");
+            for r in &rolls {
+                let used: f64 = r.usage.iter().map(|u| u.length_m).fold(0.0, |a, b| a + b);
+                let booked = match r.usage.len() {
+                    0 => "-".to_string(),
+                    n => format!("{used:.2} m in {n} job{}", if n == 1 { "" } else { "s" }),
+                };
+                println!(
+                    "{:<12} {:<22} {:<14} {:>10.2}  {:<12} {booked}{}",
+                    r.id,
+                    r.material,
+                    if r.batch.is_empty() { "-" } else { &r.batch },
+                    r.remaining_m,
+                    r.expires.as_deref().unwrap_or("-"),
+                    if r.expired(&today) { "  EXPIRED" } else { "" }
+                );
+            }
+            Ok(0)
+        }
+        Cmd::Export { project, out, extra } => {
+            let proj = Project::load(&project)?;
+            let Some(r) = &proj.result else { bail!("{} has no saved nest: nest it in the app or with `plyroll nest`", project.display()) };
+            let f = proj.check_result(r);
+            if !f.fresh {
+                bail!("the saved nest is out of date ({}). Nest again before exporting.", f.reason.unwrap_or_default());
+            }
+            let (meta, opts) = out_options(&project, &extra, Some(&proj.job), &r.layout.material, &result_key(&r.fingerprint, r.run.seed))?;
+            finish(&out, &r.plies, &r.layout, &r.warnings, &r.run, meta, &opts)
+        }
+        Cmd::Nest { job, time, seed, workers, early_stop, dump_instance, grouping, extra } => {
             let (plies, material, warnings) = prepare(&job)?;
             let saved = is_project(&job.job).then(|| Project::load(&job.job).ok().map(|p| p.job)).flatten();
             let time = time.or(saved.as_ref().map(|j| j.time_s)).unwrap_or(60);
@@ -249,7 +331,8 @@ fn run() -> Result<i32> {
                 cancel,
             )?;
             let run = RunInfo { seed, solve_seconds: start.elapsed().as_secs_f64(), stopped: stopped.load(Ordering::SeqCst) };
-            finish(&job.out, &job.job, &plies, &layout, &warnings, &run)
+            let (meta, opts) = out_options(&job.job, &extra, saved.as_ref(), &material, "")?;
+            finish(&job.out, &plies, &layout, &warnings, &run, meta, &opts)
         }
     }
 }
@@ -321,11 +404,48 @@ fn print_ply_table(plies: &[PlyShape]) {
     }
 }
 
-fn finish(out: &Path, job: &Path, plies: &[PlyShape], layout: &plyroll_core::model::Layout, warnings: &[String], run: &RunInfo) -> Result<i32> {
+/// Report details and optional outputs from the command line and the project.
+/// `key` identifies a saved nest (empty for a new one), so a booking of it on
+/// the roll is not counted twice.
+fn out_options(job: &Path, extra: &OutArgs, saved: Option<&project::JobSettings>, material: &Material, key: &str) -> Result<(ReportMeta, OutputOptions)> {
+    let name = job.file_stem().map_or_else(|| "job".to_string(), |s| s.to_string_lossy().into_owned());
+    let templates = extra.templates.or(saved.and_then(|j| j.templates));
+    let explicit = extra.roll.is_some();
+    let Some(id) = extra.roll.clone().or(saved.and_then(|j| j.roll.clone())) else {
+        return Ok((ReportMeta::new(name), OutputOptions { templates }));
+    };
+    let path = extra.rolls.clone().unwrap_or_else(|| job.parent().unwrap_or(Path::new(".")).join("rolls.toml"));
+    // A roll the project picked but this machine has no inventory for is only a warning.
+    let soft = |e: anyhow::Error| -> Result<(ReportMeta, OutputOptions)> {
+        if explicit {
+            return Err(e);
+        }
+        eprintln!("warning: {e:#}; the report has no roll");
+        Ok((ReportMeta::new(name.clone()), OutputOptions { templates }))
+    };
+    let rolls = match load_rolls(&path) {
+        Ok(r) => r,
+        Err(e) => return soft(e.context(format!("roll '{id}' needs the inventory"))),
+    };
+    let Some(roll) = rolls.iter().find(|r| r.id.eq_ignore_ascii_case(&id)) else {
+        return soft(anyhow::anyhow!("roll '{id}' is not in {}", path.display()));
+    };
+    if !roll.material.eq_ignore_ascii_case(&material.name) {
+        return soft(anyhow::anyhow!("roll '{}' is {}, but the job is nested on {}", roll.id, roll.material, material.name));
+    }
+    let today = today_utc();
+    let info = RollInfo::of(roll, key, &today);
+    if roll.expired(&today) {
+        eprintln!("warning: roll '{}' expired on {}", roll.id, roll.expires.as_deref().unwrap_or_default());
+    }
+    Ok((ReportMeta::new(name).with_roll(Some(info)), OutputOptions { templates }))
+}
+
+fn finish(out: &Path, plies: &[PlyShape], layout: &plyroll_core::model::Layout, warnings: &[String], run: &RunInfo, meta: ReportMeta, opts: &OutputOptions) -> Result<i32> {
     let m = &layout.material;
     let sum = summarize(plies, layout);
-    let name = job.file_stem().map_or_else(|| "job".to_string(), |s| s.to_string_lossy().into_owned());
-    let written = write_outputs(out, plies, layout, &sum, run, warnings, &ReportMeta::new(name))?;
+    std::fs::create_dir_all(out).with_context(|| format!("cannot create {}", out.display()))?;
+    let written = write_outputs(out, plies, layout, &sum, run, warnings, &meta, opts)?;
     let report = &sum.verification;
 
     println!("\nused length   {:.1} mm  ({:.3} m² of roll)", layout.used_length, sum.roll_area_m2);
@@ -347,10 +467,18 @@ fn finish(out: &Path, job: &Path, plies: &[PlyShape], layout: &plyroll_core::mod
         return Ok(2);
     }
     println!("verification  passed");
+    if let Some(r) = &meta.roll {
+        let need = layout.used_length / 1000.0;
+        if need > r.before_m + 1e-9 {
+            eprintln!("warning: NOT ENOUGH ROLL: the job needs {need:.2} m, roll '{}' has {:.2} m", r.id, r.before_m);
+        } else {
+            println!("roll          {} (batch {}): {:.2} m before, {:.2} m after", r.id, if r.batch.is_empty() { "-" } else { &r.batch }, r.before_m, r.before_m - need);
+        }
+    }
     for s in &layout.sections {
         println!("  kit {:<12} {:>9.1} .. {:>9.1} mm", s.kit.as_deref().unwrap_or("(no kit)"), s.start, s.end);
     }
-    let names: Vec<String> = written.iter().filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).chain(["orientation.svg".into()]).collect();
+    let names: Vec<String> = written.iter().filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).collect();
     println!("\nwrote {}/{{{}}}", out.display(), names.join(", "));
     Ok(0)
 }

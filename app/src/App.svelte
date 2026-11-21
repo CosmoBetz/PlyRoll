@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { createBackend, type Backend } from "./lib/backend";
-  import type { AppView, ImportReport, ImportSettings, JobSettings, LibraryView, LiveNest, Material, NestDone, Ply, RefPick, SourceFile, Variant } from "./lib/types";
+  import type { AppView, ImportReport, ImportSettings, JobSettings, LibraryView, LiveNest, Material, NestDone, Ply, RefPick, Roll, RollsView, SourceFile, Variant } from "./lib/types";
   import { angleColor, pickLabel, variantLabel } from "./lib/geo";
   import Editor from "./lib/Editor.svelte";
   import Thumb from "./lib/Thumb.svelte";
   import Inspector from "./lib/Inspector.svelte";
   import NestView from "./lib/NestView.svelte";
   import MaterialDialog from "./lib/MaterialDialog.svelte";
+  import RollsDialog from "./lib/RollsDialog.svelte";
   import ImportDialog from "./lib/ImportDialog.svelte";
 
   let backend = $state<Backend>();
@@ -25,6 +26,8 @@
   let mode = $state<"plies" | "nest">("plies");
   let library = $state<LibraryView>({ path: "", materials: [], error: null });
   let showMaterials = $state(false);
+  let rolls = $state<RollsView>({ path: "", rolls: [], error: null, today: "" });
+  let showRolls = $state(false);
   let showImport = $state(false);
   let sources = $state<SourceFile[] | null>(null);
   let live = $state<LiveNest | null>(null);
@@ -246,6 +249,32 @@
     const path = await backend!.pickMaterialsFile();
     if (path) await libCall(() => backend!.importMaterials(path), "Materials imported");
   }
+  async function rollCall(f: () => Promise<RollsView>, success?: string): Promise<boolean> {
+    try {
+      rolls = await f();
+      if (success) toast(success);
+      return true;
+    } catch (e) {
+      toast(String(e), "error");
+      return false;
+    }
+  }
+  const saveRoll = (original: string | null, r: Roll) => rollCall(() => backend!.saveRoll(original, $state.snapshot(r) as Roll), original ? "Roll saved" : `Added roll ${r.id}`);
+  async function deleteRoll(id: string) {
+    if (!(await backend!.confirm(`Delete roll "${id}" and its booking history from the inventory?`, "Delete"))) return false;
+    return rollCall(() => backend!.deleteRoll(id), `Deleted roll ${id}`);
+  }
+  function useRoll(id: string) {
+    if (!view) return;
+    showRolls = false;
+    setJob({ ...view.job, roll: id });
+  }
+  const bookRoll = () => rollCall(() => backend!.bookRoll(), "Booked on the roll");
+  async function unbookRoll() {
+    if (!(await backend!.confirm("Take this nest's booking back? Its length goes back on the roll.", "Take back"))) return;
+    await rollCall(() => backend!.unbookRoll(), "Booking taken back");
+  }
+
   function useMaterial(m: Material) {
     if (!view) return;
     showMaterials = false;
@@ -342,7 +371,7 @@
       }
       return;
     }
-    if (typing || !active || mode !== "plies" || showMaterials || showImport) {
+    if (typing || !active || mode !== "plies" || showMaterials || showImport || showRolls) {
       if (e.key === "Escape" && showHelp) showHelp = false;
       return;
     }
@@ -400,6 +429,7 @@
       backend = await createBackend();
       show(await backend.state());
       library = await backend.library();
+      rolls = await backend.rolls();
       unlistenNest = await backend.onNest({
         progress: (p) => {
           if (!live || live.run !== p.run) return;
@@ -496,6 +526,10 @@
       onmanage={() => (showMaterials = true)}
       onaddmaterial={(m) => saveMaterial(null, m)}
       onplies={() => (mode = "plies")}
+      {rolls}
+      onmanagerolls={() => (showRolls = true)}
+      onbook={bookRoll}
+      onunbook={unbookRoll}
     />
   {:else}
     <main>
@@ -574,6 +608,19 @@
       onimport={importMaterials}
       onuse={useMaterial}
       onclose={() => (showMaterials = false)}
+    />
+  {/if}
+
+  {#if showRolls && view}
+    <RollsDialog
+      {rolls}
+      {library}
+      material={view.job.material?.name ?? null}
+      current={view.job.roll ?? null}
+      onsave={saveRoll}
+      ondelete={deleteRoll}
+      onuse={useRoll}
+      onclose={() => (showRolls = false)}
     />
   {/if}
 
