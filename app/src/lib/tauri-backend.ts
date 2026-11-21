@@ -4,7 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { listen } from "@tauri-apps/api/event";
 import { open, save, ask } from "@tauri-apps/plugin-dialog";
 import type { Backend } from "./backend";
-import type { AppView, ImportReport, LibraryView, NestDone, NestProgress, NestStarted } from "./types";
+import type { AppView, ImportReport, LibraryView, NestDone, NestProgress, NestStarted, SourceFile } from "./types";
 
 type Imported = { view: AppView; report: ImportReport };
 
@@ -16,6 +16,8 @@ export const tauriBackend: Backend = {
   saveProject: (path) => invoke<AppView>("save_project", { path }),
   importDxf: (paths) => invoke<Imported>("import_dxf", { paths }),
   reload: () => invoke<Imported>("reload_sources"),
+  setImport: (settings) => invoke<Imported>("set_import", { settings }),
+  importSources: () => invoke<SourceFile[]>("import_sources"),
   setReference: (ids, pick) => invoke<AppView>("set_reference", { ids, pick }),
   setVariants: (ids, variants) => invoke<AppView>("set_variants", { ids, variants }),
   setCosmetic: (ids, on) => invoke<AppView>("set_cosmetic", { ids, on }),

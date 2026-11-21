@@ -3,7 +3,7 @@
 // geometry rules are simplified and nothing is saved.
 
 import type { Backend } from "./backend";
-import type { AppView, JobSettings, LayoutShapes, Material, NestDone, NestProgress, Placement, Ply, RefOrigin, RefPick, ResultView } from "./types";
+import type { AppView, ImportSettings, JobSettings, LayoutShapes, Material, NestDone, NestProgress, Placement, Ply, RefOrigin, RefPick, ResultView } from "./types";
 import { longestEdge, normAxis, totalQty } from "./geo";
 import demo from "../mock/demo-view.json";
 
@@ -61,6 +61,7 @@ function fakeNest(plies: Ply[], job: JobSettings, shuffle: number): { shapes: La
 export function createMockBackend(): Backend {
   let plies: Ply[] = structuredClone(demo as unknown as Ply[]);
   let job: JobSettings = { material: null, time_s: 30, sets: 1 };
+  let importSettings: ImportSettings = { units: "auto", join_tol: 0.01, gap_tol: 0.1, curve_tol: 0.01 };
   let undo: Snapshot[] = [];
   let redo: Snapshot[] = [];
   let dirty = false;
@@ -90,6 +91,7 @@ export function createMockBackend(): Backend {
       plies: structuredClone(plies),
       ready,
       job: structuredClone(job),
+      import: structuredClone(importSettings),
       nest_ready,
       result: result ? { ...structuredClone(result), fresh, stale_reason: fresh ? null : "plies, quantities, sets or material changed since this nest" } : null,
       running: running?.id ?? null,
@@ -134,6 +136,19 @@ export function createMockBackend(): Backend {
     saveProject: () => Promise.reject("saving needs the desktop app"),
     importDxf: () => Promise.reject("importing DXF needs the desktop app"),
     reload: () => Promise.reject("reloading DXF needs the desktop app"),
+    setImport: async (settings) => {
+      // The mock has no DXFs to re-read: only plies-free projects take new settings.
+      if (plies.length) throw "re-reading DXFs with new import settings needs the desktop app";
+      importSettings = structuredClone(settings);
+      dirty = true;
+      return { view: view(), report: { added: 0, unchanged: 0, changed: 0, rescaled: 0, warnings: [] } };
+    },
+    importSources: async () => {
+      const files = new Map<string, number>();
+      for (const p of plies) files.set(p.file, (files.get(p.file) ?? 0) + 1);
+      // The demo DXFs declare mm (tab_inch declares inch).
+      return [...files].map(([path, n]) => ({ path, found: true, file_units: path.includes("inch") ? "inch" : "mm", plies: n }));
+    },
     setReference: (ids, pick: RefPick) => {
       if ((pick.kind === "edge" || pick.kind === "points") && ids.length !== 1) return Promise.reject("pick an edge or two points on one ply at a time");
       return change(ids, (p) => {

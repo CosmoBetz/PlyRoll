@@ -62,6 +62,7 @@ export interface AppView {
   plies: Ply[];
   ready: Readiness;
   job: JobSettings;
+  import: ImportSettings;
   /** Plies ready and a material chosen. */
   nest_ready: Readiness;
   result: ResultView | null;
@@ -182,7 +183,29 @@ export interface ImportReport {
   added: number;
   unchanged: number;
   changed: number;
+  /** Same outline at a new scale after a units change; 0° kept. */
+  rescaled: number;
   warnings: string[];
+}
+
+/** "auto" reads $INSUNITS from each file (mm when unset); the others force every file. */
+export type Units = "auto" | "mm" | "cm" | "m" | "inch";
+
+/** plyroll-core project.rs ImportSettings; tolerances in mm, after scaling. */
+export interface ImportSettings {
+  units: Units;
+  join_tol: number;
+  gap_tol: number;
+  curve_tol: number;
+}
+
+/** A DXF the project's plies come from. */
+export interface SourceFile {
+  path: string;
+  found: boolean;
+  /** $INSUNITS: "mm", "inch", …, "none" when unset; null when unreadable. */
+  file_units: string | null;
+  plies: number;
 }
 
 export type RefPick =

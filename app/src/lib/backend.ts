@@ -2,7 +2,7 @@
 // implementation calls Rust commands; the mock lets the editor run in a
 // plain browser (npm run dev) with real demo data.
 
-import type { AppView, ImportReport, JobSettings, LibraryView, Material, NestDone, NestProgress, NestStarted, RefPick, Variant } from "./types";
+import type { AppView, ImportReport, ImportSettings, JobSettings, LibraryView, Material, NestDone, NestProgress, NestStarted, RefPick, SourceFile, Variant } from "./types";
 
 export interface Backend {
   readonly kind: "tauri" | "mock";
@@ -12,6 +12,10 @@ export interface Backend {
   saveProject(path: string | null): Promise<AppView>;
   importDxf(paths: string[]): Promise<{ view: AppView; report: ImportReport }>;
   reload(): Promise<{ view: AppView; report: ImportReport }>;
+  /** New units / tolerances; re-reads the project's DXFs with them (one undo step). */
+  setImport(settings: ImportSettings): Promise<{ view: AppView; report: ImportReport }>;
+  /** The project's DXFs and the units each declares. */
+  importSources(): Promise<SourceFile[]>;
   setReference(ids: number[], pick: RefPick): Promise<AppView>;
   setVariants(ids: number[], variants: Variant[]): Promise<AppView>;
   setCosmetic(ids: number[], on: boolean): Promise<AppView>;

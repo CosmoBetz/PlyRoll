@@ -109,27 +109,74 @@ struct Walker<'a> {
     skipped: BTreeMap<&'static str, usize>,
 }
 
+fn read_units(file: &FsPath) -> Result<Units> {
+    let drawing = Drawing::load_file(file).with_context(|| format!("cannot read DXF {}", file.display()))?;
+    Ok(drawing.header.default_drawing_units)
+}
+
+/// mm per drawing unit for a file's `$INSUNITS` (unset counts as mm).
+fn header_scale(u: Units) -> Option<f64> {
+    match u {
+        Units::Millimeters | Units::Unitless => Some(1.0),
+        Units::Centimeters => Some(10.0),
+        Units::Meters => Some(1000.0),
+        Units::Inches => Some(25.4),
+        Units::Feet => Some(304.8),
+        _ => None,
+    }
+}
+
+impl UnitsOverride {
+    fn forced_scale(self) -> Option<f64> {
+        match self {
+            UnitsOverride::Auto => None,
+            UnitsOverride::Mm => Some(1.0),
+            UnitsOverride::Cm => Some(10.0),
+            UnitsOverride::M => Some(1000.0),
+            UnitsOverride::Inch => Some(25.4),
+        }
+    }
+}
+
+/// mm per drawing unit that `import_dxf` uses for this file with these units.
+pub fn units_scale(units: UnitsOverride, file: &FsPath) -> Result<f64> {
+    if let Some(s) = units.forced_scale() {
+        return Ok(s);
+    }
+    let u = read_units(file)?;
+    header_scale(u).ok_or_else(|| anyhow::anyhow!("unsupported drawing units {u:?} in {}", file.display()))
+}
+
+/// The units a DXF declares in `$INSUNITS`: "mm", "cm", "m", "inch", "ft",
+/// "none" when unset, or the raw name of an unsupported unit.
+pub fn file_units(file: &FsPath) -> Result<String> {
+    Ok(match read_units(file)? {
+        Units::Millimeters => "mm".into(),
+        Units::Centimeters => "cm".into(),
+        Units::Meters => "m".into(),
+        Units::Inches => "inch".into(),
+        Units::Feet => "ft".into(),
+        Units::Unitless => "none".into(),
+        other => format!("{other:?}"),
+    })
+}
+
 pub fn import_dxf(file: &FsPath, opts: &ImportOptions) -> Result<ImportResult> {
     let drawing = Drawing::load_file(file).with_context(|| format!("cannot read DXF {}", file.display()))?;
     let mut warnings = Vec::new();
 
-    let scale = match opts.units {
-        UnitsOverride::Mm => 1.0,
-        UnitsOverride::Cm => 10.0,
-        UnitsOverride::M => 1000.0,
-        UnitsOverride::Inch => 25.4,
-        UnitsOverride::Auto => match drawing.header.default_drawing_units {
-            Units::Millimeters => 1.0,
-            Units::Centimeters => 10.0,
-            Units::Meters => 1000.0,
-            Units::Inches => 25.4,
-            Units::Feet => 304.8,
-            Units::Unitless => {
-                warnings.push("no units in file ($INSUNITS unset); assuming mm".into());
-                1.0
+    let header = drawing.header.default_drawing_units;
+    let scale = match opts.units.forced_scale() {
+        Some(s) => s,
+        None => {
+            if header == Units::Unitless {
+                warnings.push("no units in the file ($INSUNITS unset); read as mm".into());
             }
-            other => bail!("unsupported drawing units {other:?} in {}", file.display()),
-        },
+            match header_scale(header) {
+                Some(s) => s,
+                None => bail!("unsupported drawing units {header:?} in {}", file.display()),
+            }
+        }
     };
     let mut root = Affine::scale(scale, scale);
     if opts.mirror {

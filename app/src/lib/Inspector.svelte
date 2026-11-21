@@ -36,6 +36,11 @@
   const anyLayer = $derived(selected.some((p) => p.layer_ref_deg != null));
   const toConfirm = $derived(selected.filter((p) => p.status === "check").length);
 
+  function fmtSize(b: [number, number, number, number]): string {
+    const f = (v: number) => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2));
+    return `${f(b[2] - b[0])} × ${f(b[3] - b[1])} mm`;
+  }
+
   let angleText = $state("");
   let shownAngle = ""; // what the field was filled with; only a real edit is applied
   let nameText = $state("");
@@ -103,6 +108,7 @@
         aria-label="Ply name"
       />
       <p class="src">{active.file}{active.part !== active.file.replace(/\.dxf$/i, "") ? ` · part ${active.part}` : ""}</p>
+      <p class="src" title="Bounding box in the drawing, after units">{fmtSize(active.bbox)}</p>
     {/if}
   </section>
 

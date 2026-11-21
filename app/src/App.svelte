@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { createBackend, type Backend } from "./lib/backend";
-  import type { AppView, ImportReport, JobSettings, LibraryView, LiveNest, Material, NestDone, Ply, RefPick, Variant } from "./lib/types";
+  import type { AppView, ImportReport, ImportSettings, JobSettings, LibraryView, LiveNest, Material, NestDone, Ply, RefPick, SourceFile, Variant } from "./lib/types";
   import { angleColor, pickLabel, variantLabel } from "./lib/geo";
   import Editor from "./lib/Editor.svelte";
   import Thumb from "./lib/Thumb.svelte";
   import Inspector from "./lib/Inspector.svelte";
   import NestView from "./lib/NestView.svelte";
   import MaterialDialog from "./lib/MaterialDialog.svelte";
+  import ImportDialog from "./lib/ImportDialog.svelte";
 
   let backend = $state<Backend>();
   let view = $state<AppView>();
@@ -24,6 +25,8 @@
   let mode = $state<"plies" | "nest">("plies");
   let library = $state<LibraryView>({ path: "", materials: [], error: null });
   let showMaterials = $state(false);
+  let showImport = $state(false);
+  let sources = $state<SourceFile[] | null>(null);
   let live = $state<LiveNest | null>(null);
   /** Done events that arrived before startNest returned. */
   const earlyDone = new Map<number, NestDone>();
@@ -118,13 +121,43 @@
     await run(() => backend!.remove(ids), `Removed ${n} ${n === 1 ? "ply" : "plies"}`);
   }
 
-  function reportImport(r: ImportReport) {
-    const parts = [`${r.added} new`];
+  function reportImport(r: ImportReport, verb = "Imported") {
+    const parts = r.added || verb === "Imported" ? [`${r.added} new`] : [];
+    if (r.rescaled) parts.push(`${r.rescaled} rescaled`);
     if (r.changed) parts.push(`${r.changed} changed (check 0°)`);
     if (r.unchanged) parts.push(`${r.unchanged} unchanged`);
-    toast(`Imported: ${parts.join(", ")}`);
+    toast(`${verb}: ${parts.join(", ") || "nothing to re-read"}`);
     for (const w of r.warnings.slice(0, 6)) toast(w, "error");
     if (r.warnings.length > 6) toast(`…and ${r.warnings.length - 6} more warnings`, "error");
+    if (view?.import.units === "auto" && r.warnings.some((w) => w.includes("$INSUNITS"))) {
+      toast("Wrong size? Set the units in Import settings (next to Reload DXFs).");
+    }
+  }
+
+  async function openImportSettings() {
+    if (!backend) return;
+    showImport = true;
+    sources = null;
+    try {
+      sources = await backend.importSources();
+    } catch (e) {
+      sources = [];
+      toast(String(e), "error");
+    }
+  }
+
+  async function applyImport(s: ImportSettings): Promise<boolean> {
+    if (!backend) return false;
+    try {
+      const { view: v, report } = await backend.setImport(s);
+      show(v);
+      if (plies.length) reportImport(report, "Re-read");
+      else toast("Import settings saved");
+      return true;
+    } catch (e) {
+      toast(String(e), "error");
+      return false;
+    }
   }
 
   async function importFiles(paths?: string[]) {
@@ -309,7 +342,7 @@
       }
       return;
     }
-    if (typing || !active || mode !== "plies" || showMaterials) {
+    if (typing || !active || mode !== "plies" || showMaterials || showImport) {
       if (e.key === "Escape" && showHelp) showHelp = false;
       return;
     }
@@ -420,6 +453,7 @@
     <div class="group">
       <button class="primary" onclick={() => importFiles()} title="Import DXF files (⌘I) — or drop them on the window">Import DXF…</button>
       <button onclick={reload} disabled={!plies.length} title="Re-read every DXF; 0° references are kept, changed outlines are flagged">Reload DXFs</button>
+      <button onclick={openImportSettings} title="Units and gap tolerances for reading DXFs">Import settings…</button>
     </div>
     <div class="group">
       <button onclick={undo} disabled={!view?.can_undo} title="Undo (⌘Z)">Undo</button>
@@ -539,6 +573,10 @@
       onuse={useMaterial}
       onclose={() => (showMaterials = false)}
     />
+  {/if}
+
+  {#if showImport && view}
+    <ImportDialog settings={view.import} {sources} plyCount={plies.length} onapply={applyImport} onclose={() => (showImport = false)} />
   {/if}
 
   {#if showHelp}

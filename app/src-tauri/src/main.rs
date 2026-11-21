@@ -10,7 +10,7 @@
 
 use plyroll_core::job::{load_materials, save_materials};
 use plyroll_core::model::{Material, Variant};
-use plyroll_core::project::{ImportReport, JobSettings, NestResult, Project, RefPick};
+use plyroll_core::project::{ImportReport, ImportSettings, JobSettings, NestResult, Project, RefPick, SourceFile};
 use plyroll_core::report::{ReportMeta, RunInfo, write_outputs};
 use plyroll_core::view::{LayoutShapes, PlacementView, PlyView, ResultView, layout_shapes, placement_views, project_view, result_view};
 use plyroll_nest::{NestOptions, nest};
@@ -145,6 +145,7 @@ struct AppView {
     plies: Vec<PlyView>,
     ready: Readiness,
     job: JobSettings,
+    import: ImportSettings,
     /// Can nesting start (plies ready and a material chosen)?
     nest_ready: Readiness,
     result: Option<ResultView>,
@@ -197,6 +198,7 @@ fn view(st: &AppState, window: &WebviewWindow) -> AppView {
         plies: project_view(&st.project),
         ready,
         job: st.project.job.clone(),
+        import: st.project.import.clone(),
         nest_ready,
         result: st.result.as_ref().map(|r| result_view(&st.project, r)),
         running: st.run.as_ref().map(|r| r.id),
@@ -272,6 +274,21 @@ fn reload_sources(state: Shared, window: WebviewWindow) -> CmdResult<ImportResul
     let mut st = state.lock().unwrap();
     let report = st.change(|p| p.reload()).map_err(err)?;
     Ok(ImportResult { view: view(&st, &window), report })
+}
+
+/// Changes units and tolerances and re-reads the DXFs with them (one undo step).
+#[tauri::command]
+fn set_import(settings: ImportSettings, state: Shared, window: WebviewWindow) -> CmdResult<ImportResult> {
+    let mut st = state.lock().unwrap();
+    let report = st.change(|p| p.set_import(settings)).map_err(err)?;
+    Ok(ImportResult { view: view(&st, &window), report })
+}
+
+/// The project's DXFs with the units each declares (reads the files).
+#[tauri::command]
+fn import_sources(state: Shared) -> Vec<SourceFile> {
+    let project = state.lock().unwrap().project.clone();
+    project.sources()
 }
 
 #[tauri::command]
@@ -536,6 +553,8 @@ fn main() {
             save_project,
             import_dxf,
             reload_sources,
+            set_import,
+            import_sources,
             set_reference,
             set_variants,
             set_cosmetic,

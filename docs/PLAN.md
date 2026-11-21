@@ -1,6 +1,12 @@
 # PlyRoll — plan for a free, local 2D nesting tool for prepreg plies
 
-Status: revised 2026-11-21. **Phase 1 (CLI) is built. Phase 2 has the orientation editor, material library, job settings, live nesting, saved results, cut-file export and reports.** See the README for usage.
+Status: revised 2026-11-21. **Phase 1 (CLI) is built. Phase 2 has the orientation editor, material library, job settings, live nesting, saved results, cut-file export, reports and import settings.** See the README for usage.
+
+**Phase 2, import settings (so a real job never needs the CLI):**
+- **In the app:** units (from each file's `$INSUNITS`, or forced for every file) and join / gap tolerances, stored in the project as before. The dialog lists each DXF with the units it declares. The inspector shows each ply's size in mm.
+- **Applying** re-reads every DXF in place (`Project::set_import`): no parts are added, it is one undo step, and every source file must be found and import, or nothing changes. A ply whose outline matches its old outline scaled by the exact unit ratio keeps its confirmed 0°; any other change is flagged. Tolerances are in mm after scaling.
+- **Not done:** per-file units (the override applies to every file; `auto` already handles files with `$INSUNITS`) and the layer-mapping profile of §5.2 (the built-in layer names still apply).
+- **Checked:** a core test (inch on the demo: refused at the default gap tolerance, then 7 plies rescaled with 0° kept, a mirrored one included, the gusset flagged because its gap is now bridged, result stale, back to auto restores it, removed plies stay removed, missing files refused) and one for a DXF without units switched to inch. In the desktop app: the dialog, a refused change, a rescale and undo; and the Export button from the reports work (all six files, job name from the project file).
 
 **Phase 2, reports:**
 - **report.pdf** (A4 landscape, written with `pdf-writer`, base fonts only, nothing embedded): material, used length, both utilisations, scrap, cost, verification, solve time; the layout coloured by angle with cut numbers and a position scale, split into stacked strips for long jobs; then a kit checklist with one tick box per ply, its cut number and position on the roll.

@@ -84,6 +84,11 @@ Or nest the saved project from the command line. It uses the project's material,
 ```
 
 **Reload DXFs** re-reads every file. 0° references are kept, and parts whose outline changed are flagged for a check.
+**Import settings…** sets the units (from each file's `$INSUNITS`, or forced to mm / cm / m / inch for every file) and
+the join and gap tolerances, the same as `--units`, `--join-tol` and `--gap-tol` in the CLI. It lists each DXF with the
+units it declares. Applying re-reads every DXF in place. A ply whose outline only changed scale keeps its confirmed 0°;
+any other change is flagged. Undo goes back. Tolerances are in mm after scaling, so a larger unit may need a larger gap
+tolerance. The inspector shows each ply's size in mm, so a wrong unit is easy to spot.
 `plyroll convert job.csv` turns an existing job CSV into a project. `npm run dev` (in `app/`) runs the UI in a
 browser with demo data, for UI work without the desktop shell.
 

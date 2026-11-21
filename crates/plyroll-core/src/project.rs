@@ -12,14 +12,14 @@
 //! (it is then marked as out of date).
 
 use crate::geom::{Affine, BBox, FlattenMode, Path, Pt, signed_area};
-use crate::import::{ImportOptions, UnitsOverride, import_dxf};
+use crate::import::{ImportOptions, UnitsOverride, import_dxf, units_scale};
 use crate::job::{RefSpec, make_names_unique, resolve_ref};
 use crate::job::validate_material;
 use crate::model::{Layout, Material, PlyShape, RefOrigin, Shape, Variant};
 use crate::report::{RunInfo, Summary};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path as FsPath, PathBuf};
 
 pub const PROJECT_VERSION: u32 = 1;
@@ -42,6 +42,23 @@ impl Default for ImportSettings {
 }
 
 impl ImportSettings {
+    /// Largest join or gap tolerance accepted, mm.
+    pub const MAX_TOL: f64 = 5.0;
+
+    pub fn validate(&self) -> Result<()> {
+        let ok = |v: f64| v.is_finite() && v > 0.0 && v <= Self::MAX_TOL;
+        if !ok(self.join_tol) {
+            bail!("join tolerance must be more than 0 and at most {} mm", Self::MAX_TOL);
+        }
+        if !ok(self.gap_tol) || self.gap_tol < self.join_tol {
+            bail!("gap tolerance must be at least the join tolerance and at most {} mm", Self::MAX_TOL);
+        }
+        if !(self.curve_tol.is_finite() && self.curve_tol > 0.0 && self.curve_tol <= 1.0) {
+            bail!("curve tolerance must be more than 0 and at most 1 mm");
+        }
+        Ok(())
+    }
+
     pub fn options(&self) -> ImportOptions {
         ImportOptions { units: self.units, join_tol: self.join_tol, gap_tol: self.gap_tol, curve_tol: self.curve_tol, ..ImportOptions::default() }
     }
@@ -181,7 +198,19 @@ pub struct ImportReport {
     pub unchanged: usize,
     /// Outline changed; reference kept but flagged.
     pub changed: usize,
+    /// Same outline at a new scale (units changed); reference kept, not flagged.
+    pub rescaled: usize,
     pub warnings: Vec<String>,
+}
+
+/// A DXF the project's plies come from.
+#[derive(Clone, Debug, Serialize)]
+pub struct SourceFile {
+    pub path: PathBuf,
+    pub found: bool,
+    /// `$INSUNITS` of the file ("mm", "inch", … or "none"); None when it cannot be read.
+    pub file_units: Option<String>,
+    pub plies: usize,
 }
 
 /// Nesting settings stored with the project.
@@ -326,7 +355,15 @@ impl Project {
     /// name) keep their reference, variants and flags; their geometry is
     /// refreshed and flagged for a re-check when the outline changed.
     pub fn import_files(&mut self, files: &[PathBuf]) -> Result<ImportReport> {
+        self.import_inner(files, true, None)
+    }
+
+    /// `add_new`: also add parts that are not in the project yet.
+    /// `rescale`: per file, the factor by which a units change scales it; an
+    /// outline that matches the stored one times that factor is not a change.
+    fn import_inner(&mut self, files: &[PathBuf], add_new: bool, rescale: Option<&BTreeMap<PathBuf, f64>>) -> Result<ImportReport> {
         let mut rep = ImportReport::default();
+        let mut not_added = 0;
         let opts = self.import.options();
         for file in files {
             let file = canon(file);
@@ -341,10 +378,17 @@ impl Project {
                 if let Some(ply) = self.plies.iter_mut().find(|p| p.shape.source_file == file && p.part == part) {
                     let name = std::mem::take(&mut ply.shape.name);
                     let mirrored = ply.shape.mirrored_on_import;
-                    ply.shape = if mirrored { mirror_shape(&shape) } else { shape };
+                    let new_shape = if mirrored { mirror_shape(&shape) } else { shape };
+                    let old_shape = std::mem::replace(&mut ply.shape, new_shape);
                     ply.shape.name = name;
                     if sig.matches(&ply.signature) {
                         rep.unchanged += 1;
+                    } else if let Some(&k) = rescale.and_then(|m| m.get(&file)).filter(|&&k| k != 1.0)
+                        && sig.matches(&rescaled_signature(&old_shape, k))
+                    {
+                        // A uniform scale keeps every direction, so the 0° reference still holds.
+                        ply.signature = sig;
+                        rep.rescaled += 1;
                     } else {
                         ply.signature = sig;
                         if ply.reference.is_some() {
@@ -353,6 +397,8 @@ impl Project {
                         }
                         rep.changed += 1;
                     }
+                } else if !add_new {
+                    not_added += 1;
                 } else {
                     let id = self.next_id;
                     self.next_id += 1;
@@ -379,7 +425,57 @@ impl Project {
                 rep.warnings.push(format!("{}: part '{}' is no longer in the file", fname, ply.part));
             }
         }
+        if not_added > 0 {
+            rep.warnings.push(format!("{not_added} part(s) in the files are not in the project; Reload DXFs adds them"));
+        }
         Ok(rep)
+    }
+
+    /// Changes the import settings and re-reads every source DXF with them,
+    /// in place: no parts are added. After a units change, a ply whose outline
+    /// only changed scale keeps its confirmed 0°. Every source file must be
+    /// found and import, so the project is never left half at the old settings.
+    /// Tolerances are in mm after scaling, so a larger unit can open small gaps.
+    pub fn set_import(&mut self, settings: ImportSettings) -> Result<ImportReport> {
+        settings.validate()?;
+        let files: BTreeSet<PathBuf> = self.plies.iter().map(|p| p.shape.source_file.clone()).collect();
+        let missing: Vec<String> = files.iter().filter(|f| !f.exists()).map(|f| f.display().to_string()).collect();
+        if !missing.is_empty() {
+            bail!("cannot re-read the plies with new import settings; not found: {}", missing.join(", "));
+        }
+        let mut scale = BTreeMap::new();
+        if settings.units != self.import.units {
+            for f in &files {
+                let k = units_scale(settings.units, f)? / units_scale(self.import.units, f)?;
+                scale.insert(f.clone(), k);
+            }
+        }
+        // Work on a copy, so a file that no longer imports leaves everything as it was.
+        let mut next = self.clone();
+        next.import = settings;
+        let files: Vec<PathBuf> = files.into_iter().collect();
+        let rep = next.import_inner(&files, false, Some(&scale)).context(
+            "the DXFs no longer import with these settings, so nothing was changed. A larger unit turns small gaps into larger ones in mm: try a larger gap tolerance",
+        )?;
+        *self = next;
+        Ok(rep)
+    }
+
+    /// The DXFs the plies come from, with the units each file declares.
+    pub fn sources(&self) -> Vec<SourceFile> {
+        let mut files: Vec<SourceFile> = Vec::new();
+        for p in &self.plies {
+            match files.iter_mut().find(|f| f.path == p.shape.source_file) {
+                Some(f) => f.plies += 1,
+                None => {
+                    let path = p.shape.source_file.clone();
+                    let found = path.exists();
+                    let file_units = if found { crate::import::file_units(&path).ok() } else { None };
+                    files.push(SourceFile { path, found, file_units, plies: 1 });
+                }
+            }
+        }
+        files
     }
 
     /// Builds a project from CSV job rows (same result as `load_job`).
@@ -668,6 +764,19 @@ pub fn contour_of(shape: &Shape, contour: usize) -> Option<&Path> {
 }
 
 /// Mirrors about the drawing Y axis, keeping the outline CCW and holes CW.
+/// Signature of a stored ply shape scaled by `k`, in the form `Signature::of`
+/// gives for the raw import (stored shapes may be mirrored).
+fn rescaled_signature(stored: &Shape, k: f64) -> Signature {
+    let t = Affine::scale(k, k);
+    let tol = 0.01;
+    let scaled = Shape {
+        outer: stored.outer.transformed(&t, tol),
+        holes: stored.holes.iter().map(|h| h.transformed(&t, tol)).collect(),
+        ..stored.clone()
+    };
+    Signature::of(&if stored.mirrored_on_import { mirror_shape(&scaled) } else { scaled })
+}
+
 pub fn mirror_shape(s: &Shape) -> Shape {
     let m = Affine::mirror_x();
     let tol = 0.01;
