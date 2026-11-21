@@ -14,6 +14,7 @@ tauri-build = { version = "2.7.6", features = [] }
 
 [dependencies]
 plyroll-core = { path = "../../crates/plyroll-core" }
+plyroll-nest = { path = "../../crates/plyroll-nest" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -1,11 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { createBackend, type Backend } from "./lib/backend";
-  import type { AppView, ImportReport, Ply, RefPick, Variant } from "./lib/types";
+  import type { AppView, ImportReport, JobSettings, LibraryView, LiveNest, Material, NestDone, Ply, RefPick, Variant } from "./lib/types";
   import { angleColor, pickLabel, variantLabel } from "./lib/geo";
   import Editor from "./lib/Editor.svelte";
   import Thumb from "./lib/Thumb.svelte";
   import Inspector from "./lib/Inspector.svelte";
+  import NestView from "./lib/NestView.svelte";
+  import MaterialDialog from "./lib/MaterialDialog.svelte";
 
   let backend = $state<Backend>();
   let view = $state<AppView>();
@@ -19,6 +21,12 @@
   let toasts = $state<{ id: number; kind: "info" | "error"; text: string }[]>([]);
   let editor = $state<Editor>();
   let toastSeq = 0;
+  let mode = $state<"plies" | "nest">("plies");
+  let library = $state<LibraryView>({ path: "", materials: [], error: null });
+  let showMaterials = $state(false);
+  let live = $state<LiveNest | null>(null);
+  /** Done events that arrived before startNest returned. */
+  const earlyDone = new Map<number, NestDone>();
 
   const plies = $derived(view?.plies ?? []);
   const todo = $derived(plies.filter((p) => p.status !== "ok"));
@@ -157,6 +165,7 @@
     if (!backend || !(await guardUnsaved())) return;
     selection = [];
     activeId = null;
+    live = null;
     await run(() => backend!.newProject());
   }
 
@@ -166,6 +175,7 @@
     if (!path) return;
     selection = [];
     activeId = null;
+    live = null;
     await run(() => backend!.openProject(path), "Project opened");
   }
 
@@ -177,6 +187,80 @@
       if (!path) return;
     }
     await run(() => backend!.saveProject(path), "Saved");
+  }
+
+  // ---- nesting and materials ------------------------------------------------
+
+  // Plain copies: view data are $state proxies, which structuredClone and IPC do not like.
+  const setJob = (job: JobSettings) => backend && run(() => backend!.setJob($state.snapshot(job) as JobSettings));
+
+  async function libCall(f: () => Promise<LibraryView>, success?: string): Promise<boolean> {
+    try {
+      library = await f();
+      if (success) toast(success);
+      return true;
+    } catch (e) {
+      toast(String(e), "error");
+      return false;
+    }
+  }
+  const saveMaterial = (original: string | null, m: Material) => libCall(() => backend!.saveMaterial(original, $state.snapshot(m) as Material), original ? "Material saved" : `Added ${m.name}`);
+  async function deleteMaterial(name: string) {
+    if (!(await backend!.confirm(`Delete "${name}" from the material library? Projects that use it keep their own copy.`, "Delete"))) return false;
+    return libCall(() => backend!.deleteMaterial(name), `Deleted ${name}`);
+  }
+  async function importMaterials() {
+    const path = await backend!.pickMaterialsFile();
+    if (path) await libCall(() => backend!.importMaterials(path), "Materials imported");
+  }
+  function useMaterial(m: Material) {
+    if (!view) return;
+    showMaterials = false;
+    setJob({ ...view.job, material: structuredClone($state.snapshot(m)) });
+  }
+
+  async function startNest() {
+    if (!backend || live) return;
+    try {
+      const s = await backend.startNest();
+      live = { run: s.run, time_s: s.time_s, shapes: s.shapes, placements: null, length: null, density: null, elapsed: 0, phase: "start", stopping: false };
+      const early = earlyDone.get(s.run);
+      if (early) nestDone(early);
+    } catch (e) {
+      toast(String(e), "error");
+    }
+  }
+  async function stopNest() {
+    if (!backend) return;
+    if (live) live.stopping = true;
+    await backend.stopNest();
+  }
+  async function nestDone(d: NestDone) {
+    if (!live || live.run !== d.run) {
+      earlyDone.set(d.run, d);
+      return;
+    }
+    live = null;
+    earlyDone.clear();
+    show(await backend!.state());
+    if (d.error) toast(`Nesting failed: ${d.error}`, "error");
+    else if (view?.result) {
+      const r = view.result.summary;
+      toast(`${d.stopped ? "Stopped" : "Done"}: ${r.used_length_mm.toFixed(1)} mm, ${(100 * r.utilization_of_usable_area).toFixed(1)}% of usable area${r.verification.ok ? "" : " — FAILED verification"}`, r.verification.ok ? "info" : "error");
+    }
+  }
+  async function exportResult() {
+    if (!backend) return;
+    // Start next to the project file, where the cut files usually belong.
+    const projectDir = view?.path ? view.path.replace(/[\\/][^\\/]*$/, "") : undefined;
+    const dir = await backend.pickFolder(projectDir || undefined);
+    if (!dir) return;
+    try {
+      const files = await backend.exportResult(dir);
+      toast(`Wrote ${files.map((f) => f.split(/[\\/]/).pop()).join(", ")} to ${dir}`);
+    } catch (e) {
+      toast(String(e), "error");
+    }
   }
 
   const undo = () => backend && view?.can_undo && run(() => backend!.undo());
@@ -206,6 +290,8 @@
     if (mod) {
       const k = e.key.toLowerCase();
       const map: Record<string, () => void> = {
+        "1": () => (mode = "plies"),
+        "2": () => (mode = "nest"),
         s: () => save(e.shiftKey),
         o: openProject,
         i: () => importFiles(),
@@ -223,7 +309,7 @@
       }
       return;
     }
-    if (typing || !active) {
+    if (typing || !active || mode !== "plies" || showMaterials) {
       if (e.key === "Escape" && showHelp) showHelp = false;
       return;
     }
@@ -276,9 +362,22 @@
 
   onMount(() => {
     let unlisten: (() => void) | undefined;
+    let unlistenNest: (() => void) | undefined;
     (async () => {
       backend = await createBackend();
       show(await backend.state());
+      library = await backend.library();
+      unlistenNest = await backend.onNest({
+        progress: (p) => {
+          if (!live || live.run !== p.run) return;
+          live.length = p.length;
+          live.density = p.density;
+          live.elapsed = p.elapsed;
+          live.phase = p.phase;
+          if (p.placements) live.placements = p.placements;
+        },
+        done: nestDone,
+      });
       unlisten = await backend.onFileDrop((paths) => {
         const dxf = paths.filter((p) => /\.dxf$/i.test(p));
         const proj = paths.find((p) => /\.plyroll$/i.test(p));
@@ -295,7 +394,10 @@
       });
       await backend.onCloseRequested(() => !!view?.dirty);
     })();
-    return () => unlisten?.();
+    return () => {
+      unlisten?.();
+      unlistenNest?.();
+    };
   });
 </script>
 
@@ -304,6 +406,12 @@
 <div class="app">
   <header>
     <div class="brand">PlyRoll</div>
+    <div class="tabs" role="tablist">
+      <button role="tab" aria-selected={mode === "plies"} class:on={mode === "plies"} onclick={() => (mode = "plies")} title="Plies and 0° references (⌘1)">Plies</button>
+      <button role="tab" aria-selected={mode === "nest"} class:on={mode === "nest"} onclick={() => (mode = "nest")} title="Material, nesting and cut files (⌘2)"
+        >Nest{#if live}<span class="pulse" title="Nesting"></span>{:else if view?.result && !view.result.fresh}<span class="stale-dot" title="Result out of date"></span>{/if}</button
+      >
+    </div>
     <div class="group">
       <button onclick={newProject} title="New project (⌘N)">New</button>
       <button onclick={openProject} title="Open project (⌘O)">Open…</button>
@@ -322,7 +430,7 @@
       {#if backend?.kind === "mock"}<span class="mock">browser preview — nothing is saved</span>{/if}
     </div>
     {#if plies.length}
-      <button class="ready" class:ok={view?.ready.ok} title={view?.ready.message} onclick={nextTodo}>
+      <button class="ready" class:ok={view?.ready.ok} title={view?.ready.message} onclick={() => ((mode = "plies"), nextTodo())}>
         {#if view?.ready.ok}Ready to nest{:else if todo.length}{todo.length} of {plies.length} need 0°{:else}Not ready{/if}
       </button>
     {/if}
@@ -340,6 +448,19 @@
         <p class="hint">or drop DXF files here · <button class="link" onclick={openProject}>open a project</button></p>
       </div>
     </div>
+  {:else if mode === "nest"}
+    <NestView
+      {view}
+      {library}
+      {live}
+      onjob={setJob}
+      onstart={startNest}
+      onstop={stopNest}
+      onexport={exportResult}
+      onmanage={() => (showMaterials = true)}
+      onaddmaterial={(m) => saveMaterial(null, m)}
+      onplies={() => (mode = "plies")}
+    />
   {:else}
     <main>
       <nav class="list">
@@ -408,6 +529,18 @@
     </main>
   {/if}
 
+  {#if showMaterials && view}
+    <MaterialDialog
+      {library}
+      current={view.job.material?.name ?? null}
+      onsave={saveMaterial}
+      ondelete={deleteMaterial}
+      onimport={importMaterials}
+      onuse={useMaterial}
+      onclose={() => (showMaterials = false)}
+    />
+  {/if}
+
   {#if showHelp}
     <div class="help" role="dialog" aria-label="Keyboard shortcuts">
       <h3>Keyboard</h3>
@@ -425,6 +558,7 @@
         <dt>V, double-click</dt><dd>fit view · wheel zooms · drag pans</dd>
         <dt>⌫</dt><dd>remove selected plies</dd>
         <dt>⌘Z / ⇧⌘Z</dt><dd>undo / redo</dd>
+        <dt>⌘1 / ⌘2</dt><dd>plies / nest</dd>
       </dl>
       <button onclick={() => (showHelp = false)}>Close</button>
     </div>
@@ -450,6 +584,47 @@
     padding: 8px 12px;
     border-bottom: 1px solid var(--line);
     background: var(--panel);
+  }
+  .tabs {
+    display: flex;
+    gap: 2px;
+    background: var(--bg);
+    border-radius: 7px;
+    padding: 2px;
+  }
+  .tabs button {
+    border: none;
+    background: transparent;
+    padding: 4px 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .tabs button.on {
+    background: var(--panel);
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+    font-weight: 600;
+  }
+  .pulse,
+  .stale-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .pulse {
+    animation: pulse 1s ease-in-out infinite alternate;
+  }
+  .stale-dot {
+    background: var(--warn);
+  }
+  @keyframes pulse {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0.25;
+    }
   }
   .brand {
     font-weight: 700;

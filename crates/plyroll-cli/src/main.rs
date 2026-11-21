@@ -12,7 +12,7 @@ use plyroll_core::import::{ImportOptions, UnitsOverride, import_dxf};
 use plyroll_core::job::{load_job, load_materials, read_job_csv};
 use plyroll_core::model::{Material, PlyShape};
 use plyroll_core::project::{self, Project};
-use plyroll_core::verify::verify;
+use plyroll_core::report::{RunInfo, summarize, write_outputs};
 use plyroll_nest::{NestOptions, nest};
 
 #[derive(Parser)]
@@ -69,9 +69,10 @@ struct JobArgs {
     /// Material library (TOML). Default: materials.toml next to the job file.
     #[arg(long)]
     materials: Option<PathBuf>,
-    /// Material name from the library.
+    /// Material name from the library. Optional for a .plyroll project that
+    /// already has a material.
     #[arg(long, short)]
-    material: String,
+    material: Option<String>,
     /// Output folder.
     #[arg(long, short, default_value = "out")]
     out: PathBuf,
@@ -85,9 +86,9 @@ enum Cmd {
     Nest {
         #[command(flatten)]
         job: JobArgs,
-        /// Optimisation time in seconds.
-        #[arg(long, short, default_value_t = 60)]
-        time: u64,
+        /// Optimisation time in seconds (default: the project's time, else 60).
+        #[arg(long, short)]
+        time: Option<u64>,
         /// Random seed. Runs differ anyway when several threads race against the time limit.
         #[arg(long)]
         seed: Option<u64>,
@@ -163,6 +164,7 @@ fn run() -> Result<i32> {
         }
         Cmd::Nest { job, time, seed, workers, early_stop, dump_instance } => {
             let (plies, material, warnings) = prepare(&job)?;
+            let time = time.or_else(|| is_project(&job.job).then(|| Project::load(&job.job).map(|p| p.job.time_s).ok()).flatten()).unwrap_or(60);
             print_ply_table(&plies);
             let seed = seed.unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_secs()));
             let opts = NestOptions {
@@ -182,6 +184,7 @@ fn run() -> Result<i32> {
             let total: u32 = plies.iter().flat_map(|p| p.variants.iter().map(|v| v.qty)).sum();
             println!("\nnesting {total} plies on {} for up to {time} s ({} threads, seed {seed}); Ctrl-C stops and keeps the best layout", material.name, opts.workers);
             let cancel = Arc::new(AtomicBool::new(false));
+            let stopped = cancel.clone();
             {
                 let c = cancel.clone();
                 let _ = ctrlc::set_handler(move || {
@@ -208,21 +211,43 @@ fn run() -> Result<i32> {
                 },
                 cancel,
             )?;
-            let solve_secs = start.elapsed().as_secs_f64();
-            finish(&job.out, &plies, &layout, &warnings, seed, solve_secs)
+            let run = RunInfo { seed, solve_seconds: start.elapsed().as_secs_f64(), stopped: stopped.load(Ordering::SeqCst) };
+            finish(&job.out, &plies, &layout, &warnings, &run)
         }
     }
 }
 
-/// Loads job + material, writes the orientation preview.
-fn prepare(job: &JobArgs) -> Result<(Vec<PlyShape>, Material, Vec<String>)> {
+/// Material named on the command line, from the library.
+fn library_material(job: &JobArgs, name: &str) -> Result<Material> {
     let mat_path = job.materials.clone().unwrap_or_else(|| job.job.parent().unwrap_or(Path::new(".")).join("materials.toml"));
     let materials = load_materials(&mat_path)?;
-    let Some(material) = materials.iter().find(|m| m.name.eq_ignore_ascii_case(&job.material)).cloned() else {
+    let Some(material) = materials.iter().find(|m| m.name.eq_ignore_ascii_case(name)).cloned() else {
         let names: Vec<&str> = materials.iter().map(|m| m.name.as_str()).collect();
-        bail!("material '{}' not found in {} (available: {})", job.material, mat_path.display(), names.join(", "));
+        bail!("material '{}' not found in {} (available: {})", name, mat_path.display(), names.join(", "));
     };
-    let (plies, warnings) = load_plies(job)?;
+    Ok(material)
+}
+
+/// Loads job + material, writes the orientation preview.
+fn prepare(job: &JobArgs) -> Result<(Vec<PlyShape>, Material, Vec<String>)> {
+    let chosen = job.material.as_deref().map(|n| library_material(job, n)).transpose()?;
+    let (plies, material, warnings) = if is_project(&job.job) {
+        // A project brings its own material and number of sets.
+        let proj = Project::load(&job.job)?;
+        if chosen.is_none() && proj.job.material.is_none() {
+            bail!("project {} has no material yet: pick one in the app, or pass -m <name>", job.job.display());
+        }
+        let input = proj.nest_input(chosen.as_ref()).with_context(|| format!("project {}", job.job.display()))?;
+        if proj.job.sets > 1 {
+            println!("{} sets: every quantity is multiplied by {}", proj.job.sets, proj.job.sets);
+        }
+        (input.plies, input.material, input.warnings)
+    } else {
+        let Some(material) = chosen else { bail!("--material is required for a job CSV") };
+        let rows = read_job_csv(&job.job)?;
+        let loaded = load_job(&rows, &job.import.options())?;
+        (loaded.plies, material, loaded.warnings)
+    };
     for w in &warnings {
         eprintln!("warning: {w}");
     }
@@ -233,17 +258,6 @@ fn prepare(job: &JobArgs) -> Result<(Vec<PlyShape>, Material, Vec<String>)> {
 
 fn is_project(p: &Path) -> bool {
     p.extension().is_some_and(|e| e.eq_ignore_ascii_case(project::EXTENSION))
-}
-
-/// Plies from a job CSV or a `.plyroll` project (made in the orientation editor).
-fn load_plies(job: &JobArgs) -> Result<(Vec<PlyShape>, Vec<String>)> {
-    if is_project(&job.job) {
-        let proj = Project::load(&job.job)?;
-        return proj.to_plies().with_context(|| format!("project {}", job.job.display()));
-    }
-    let rows = read_job_csv(&job.job)?;
-    let loaded = load_job(&rows, &job.import.options())?;
-    Ok((loaded.plies, loaded.warnings))
 }
 
 fn print_ply_table(plies: &[PlyShape]) {
@@ -270,42 +284,16 @@ fn print_ply_table(plies: &[PlyShape]) {
     }
 }
 
-fn finish(out: &Path, plies: &[PlyShape], layout: &plyroll_core::model::Layout, warnings: &[String], seed: u64, solve_secs: f64) -> Result<i32> {
+fn finish(out: &Path, plies: &[PlyShape], layout: &plyroll_core::model::Layout, warnings: &[String], run: &RunInfo) -> Result<i32> {
     let m = &layout.material;
-    let report = verify(plies, layout);
-    let parts_area: f64 = layout.placements.iter().map(|pl| plies[pl.shape_idx].shape.area(0.01)).sum();
-    let roll_area = layout.used_length * m.roll_width;
-    let usable_area = (layout.used_length - m.lead_trim).max(0.0) * m.usable_width();
-    let summary = serde_json::json!({
-        "material": m,
-        "used_length_mm": layout.used_length,
-        "roll_area_m2": roll_area / 1e6,
-        "parts_area_m2": parts_area / 1e6,
-        "utilization_of_roll": if roll_area > 0.0 { parts_area / roll_area } else { 0.0 },
-        "utilization_of_usable_area": if usable_area > 0.0 { parts_area / usable_area } else { 0.0 },
-        "material_cost": m.cost_per_m2.map(|c| c * roll_area / 1e6),
-        "plies": layout.placements.len(),
-        "solve_seconds": solve_secs,
-        "seed": seed,
-        "verification": &report,
-        "import_warnings": warnings,
-        "layout": layout,
-    });
-    std::fs::write(out.join("report.json"), serde_json::to_string_pretty(&summary)?)?;
-    let title = format!(
-        "{} — {} plies — used length {:.1} mm — utilisation {:.1}% of roll{}",
-        m.name,
-        layout.placements.len(),
-        layout.used_length,
-        100.0 * parts_area / roll_area.max(1e-9),
-        if report.ok { "" } else { " — FAILED VERIFICATION" }
-    );
-    export::write_svg(&out.join("layout.svg"), plies, layout, &title)?;
+    let sum = summarize(plies, layout);
+    let written = write_outputs(out, plies, layout, &sum, run, warnings)?;
+    let report = &sum.verification;
 
-    println!("\nused length   {:.1} mm  ({:.3} m² of roll)", layout.used_length, roll_area / 1e6);
-    println!("utilisation   {:.1}% of roll, {:.1}% of usable area", 100.0 * parts_area / roll_area.max(1e-9), 100.0 * parts_area / usable_area.max(1e-9));
-    if let Some(c) = m.cost_per_m2 {
-        println!("material cost {:.2}", c * roll_area / 1e6);
+    println!("\nused length   {:.1} mm  ({:.3} m² of roll)", layout.used_length, sum.roll_area_m2);
+    println!("utilisation   {:.1}% of roll, {:.1}% of usable area", 100.0 * sum.utilization_of_roll, 100.0 * sum.utilization_of_usable_area);
+    if let Some(c) = sum.material_cost {
+        println!("material cost {c:.2}");
     }
     match report.min_gap {
         Some(g) => println!("smallest gap  {g:.3} mm (spacing {:.3} mm)", m.spacing),
@@ -320,10 +308,9 @@ fn finish(out: &Path, plies: &[PlyShape], layout: &plyroll_core::model::Layout, 
         println!("wrote {} and {} for diagnosis", out.join("layout.svg").display(), out.join("report.json").display());
         return Ok(2);
     }
-    export::write_dxf(&out.join("layout.dxf"), plies, layout)?;
-    export::write_ply_csv(&out.join("plies.csv"), plies, layout)?;
     println!("verification  passed");
-    println!("\nwrote {}/{{layout.dxf, layout.svg, plies.csv, report.json, orientation.svg}}", out.display());
+    let names: Vec<String> = written.iter().filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).chain(["orientation.svg".into()]).collect();
+    println!("\nwrote {}/{{{}}}", out.display(), names.join(", "));
     Ok(0)
 }
 

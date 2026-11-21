@@ -197,8 +197,9 @@ pub fn make_names_unique(plies: &mut [PlyShape]) {
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 struct MaterialFile {
+    #[serde(default)]
     material: Vec<Material>,
 }
 
@@ -211,8 +212,36 @@ pub fn load_materials(path: &Path) -> Result<Vec<Material>> {
     Ok(mf.material)
 }
 
+/// Writes a material library in the same TOML format `load_materials` reads.
+pub fn save_materials(path: &Path, materials: &[Material]) -> Result<()> {
+    for m in materials {
+        validate_material(m)?;
+    }
+    let text = format!(
+        "# PlyRoll material library. Lengths in mm, angles in degrees.\n\n{}",
+        toml::to_string_pretty(&MaterialFile { material: materials.to_vec() })?
+    );
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    }
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, text).with_context(|| format!("cannot write {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("cannot write {}", path.display()))?;
+    Ok(())
+}
+
 pub fn validate_material(m: &Material) -> Result<()> {
     let ctx = |msg: &str| anyhow!("material '{}': {msg}", m.name);
+    if m.name.trim().is_empty() {
+        return Err(anyhow!("a material needs a name"));
+    }
+    let finite = [m.roll_width, m.edge_trim, m.lead_trim, m.spacing, m.angle_tolerance, m.tolerance_step];
+    if finite.iter().any(|v| !v.is_finite()) || m.cost_per_m2.is_some_and(|c| !c.is_finite() || c < 0.0) {
+        return Err(ctx("all numbers must be finite, and the cost must not be negative"));
+    }
+    if m.angle_tolerance > 0.0 && m.tolerance_step <= 0.0 {
+        return Err(ctx("tolerance_step must be positive"));
+    }
     if m.roll_width <= 0.0 {
         return Err(ctx("roll_width must be positive"));
     }

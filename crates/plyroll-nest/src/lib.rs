@@ -45,6 +45,8 @@ pub struct NestOptions {
     pub early_stop: bool,
     /// Chord tolerance used to turn arcs into the (enclosing) nesting polygon, mm.
     pub nest_tol: f64,
+    /// Attach the current layout to progress reports, at most this often.
+    pub live_layout: Option<Duration>,
 }
 
 impl Default for NestOptions {
@@ -55,6 +57,7 @@ impl Default for NestOptions {
             workers: std::thread::available_parallelism().map_or(4, |n| n.get()),
             early_stop: false,
             nest_tol: 0.05,
+            live_layout: None,
         }
     }
 }
@@ -66,6 +69,8 @@ pub struct Progress {
     pub length: f64,
     pub density: f64,
     pub elapsed: Duration,
+    /// Best feasible layout so far (only with `NestOptions::live_layout`).
+    pub layout: Option<Layout>,
 }
 
 /// One solver item: a shape at one set of allowed rotations, possibly
@@ -131,9 +136,11 @@ pub fn build_groups(plies: &[PlyShape], material: &Material) -> Result<Vec<ItemG
 
 struct Listener<'a, F: FnMut(&Progress)> {
     cb: &'a mut F,
-    spacing: f64,
-    lead: f64,
-    phase: &'static str,
+    plies: &'a [PlyShape],
+    material: &'a Material,
+    groups: &'a [ItemGroup],
+    live: Option<Duration>,
+    last_live: Option<std::time::Instant>,
     start: std::time::Instant,
 }
 
@@ -145,9 +152,16 @@ impl<F: FnMut(&Progress)> SolutionListener for Listener<'_, F> {
             ReportType::Final => "final",
             _ => return,
         };
-        self.phase = phase;
-        let length = solution.strip().width as f64 - 2.0 * self.spacing + self.lead;
-        (self.cb)(&Progress { phase, length, density: solution.density() as f64, elapsed: self.start.elapsed() });
+        let length = solution.strip().width as f64 - 2.0 * self.material.spacing + self.material.lead_trim;
+        let now = std::time::Instant::now();
+        let layout = match self.live {
+            Some(every) if phase != "final" && self.last_live.is_none_or(|t| now - t >= every) => {
+                self.last_live = Some(now);
+                map_solution(self.plies, self.material, self.groups, solution).ok()
+            }
+            _ => None,
+        };
+        (self.cb)(&Progress { phase, length, density: solution.density() as f64, elapsed: self.start.elapsed(), layout });
     }
 }
 
@@ -215,13 +229,23 @@ pub fn nest(plies: &[PlyShape], material: &Material, opts: &NestOptions, mut on_
     let instance = jagua_rs::probs::spp::io::import_instance(&importer, &ext)?;
     let seed = opts.seed.unwrap_or_else(rand::random);
     let rng = Xoshiro256PlusPlus::seed_from_u64(seed);
-    let mut listener = Listener { cb: &mut on_progress, spacing: material.spacing, lead: material.lead_trim, phase: "start", start: std::time::Instant::now() };
+    let mut listener = Listener {
+        cb: &mut on_progress,
+        plies,
+        material,
+        groups: &groups,
+        live: opts.live_layout,
+        last_live: None,
+        start: std::time::Instant::now(),
+    };
     let mut term = CancelTerminator { timeout: None, cancel };
     let solution = sparrow::optimizer::optimize(instance, rng, &mut listener, &mut term, &config.expl_cfg, &config.cmpr_cfg, None)?;
-    let _ = listener.phase;
-    let out = jagua_rs::probs::spp::io::export(&solution, *sparrow::EPOCH);
+    map_solution(plies, material, &groups, &solution)
+}
 
-    // Map solver placements back to plies.
+/// Maps a solver solution back to ply placements in roll coordinates.
+fn map_solution(plies: &[PlyShape], material: &Material, groups: &[ItemGroup], solution: &SPSolution) -> Result<Layout> {
+    let out = jagua_rs::probs::spp::io::export(solution, *sparrow::EPOCH);
     let s = material.spacing;
     let (dx, dy) = (material.lead_trim - s, material.edge_trim - s);
     let mut per_group: Vec<Vec<(f64, f64, f64)>> = vec![vec![]; groups.len()];

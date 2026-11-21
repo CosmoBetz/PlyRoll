@@ -1,8 +1,17 @@
 # PlyRoll — plan for a free, local 2D nesting tool for prepreg plies
 
-Status: revised 2026-11-21. **Phase 1 (CLI) is built; Phase 2 has started with the orientation editor.** See the README for usage.
+Status: revised 2026-11-21. **Phase 1 (CLI) is built. Phase 2 has the orientation editor, material library, job settings, live nesting, saved results and cut-file export; reports are next.** See the README for usage.
 
-**Phase 2 so far (orientation editor):**
+**Phase 2, second part (material library, nesting, results):**
+- **Material library:** one TOML file in the app's config folder (macOS: `~/Library/Application Support/org.plyroll.desktop/materials.toml`), the same format the CLI reads with `--materials`, so it can be shared and edited by hand. TOML instead of the JSON planned in §5.3, so there is one format. The project keeps its own copy of the chosen material; editing the library never changes a project until the material is picked again. A library file that fails to load is never overwritten.
+- **Job settings in the project:** material, time budget (30 s / 2 min / 10 min presets or custom) and set multiplier. The multiplier is applied in `plyroll-core` (`Project::nest_input`), so the CLI and the app build the same job.
+- **Live nesting:** the adapter maps intermediate solutions to full layouts every ~400 ms. Stop keeps the best layout found, which is complete and verified like a finished one.
+- **Saved results:** a project stores the last result with the exact solver input it was made from and a fingerprint of plies, quantities, sets and material. Any edit marks it *out of date* (shown, export disabled); undo makes it current again. Results are outside undo, so undo never deletes a nest. Geometry round-trips bit-exactly (`serde_json` `float_roundtrip`), so a saved result is still current after reopening.
+- **Export:** the app writes the same files as the CLI (`report.json`, `layout.svg`, and only when verification passes `layout.dxf` and `plies.csv`), through one shared `plyroll-core::report` function.
+- **CLI:** `-m` is optional for a project that has a material; `--time` defaults to the project's.
+- **Checked:** core, nest and round-trip tests (34) pass. In the desktop app: add a material, nest the demo (30 s, stopped at 17 s: 2298 mm, 80.0% of usable area, verified), stale/undo, save, reopen, export. The app's DXF has the same layers and entity counts as a CLI run on the same project (50 cut contours = 44 plies + 6 holes).
+
+**Phase 2, first part (orientation editor):**
 - **Project file:** `plyroll-core::project` holds a `.plyroll` JSON project. It caches the geometry, so the project opens without the DXFs. Source paths are stored relative to the project.
 - **Re-import:** a part is matched by file and part name and keeps its 0° reference. If its outline signature changed, it is flagged for a check. The signature is translation-invariant but deliberately not rotation-invariant: a part rotated in CAD must be re-checked.
 - **References:** 0° is kept in (−90°, 90°]. Edge clicks, two-point picks, rules (X / Y / longest edge / bounding box / fibre layer), typed angles and ±1° / ±15° turns all go through one core function, shared with the CSV path. Mirroring flips the reference and asks for a re-check.
@@ -193,10 +202,10 @@ Export is blocked otherwise.
 - SVG import (P1). DWG import through ODA File Converter if it is installed (P2).
 
 ### 5.3 Materials, rolls, stock — P0/P1
-- **Material library (P0)**, saved as JSON in the app data folder. Each material has:
+- **Material library (P0)**, saved as TOML in the app config folder (done; see the status notes). Each material has:
   - name and type (**UD** or **twill**)
   - for twill: the "warp/weft interchangeable" switch (§5.1)
-  - areal weight and cost per m²
+  - cost per m² (areal weight: not yet)
   - nominal roll width
   - **edge trim** on each side (selvedge, damaged edges) and **leading-edge trim**
   - default part spacing

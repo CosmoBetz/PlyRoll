@@ -9,5 +9,6 @@ pub mod job;
 pub mod model;
 pub mod orient;
 pub mod project;
+pub mod report;
 pub mod verify;
 pub mod view;

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// One imported outline, before any orientation is assigned.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
     pub name: String,
     pub source_file: PathBuf,
@@ -44,7 +44,7 @@ pub enum RefOrigin {
     FromLayer,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Variant {
     /// Ply angle relative to the shape's 0° reference, degrees, CCW positive.
     pub angle_deg: f64,
@@ -53,7 +53,7 @@ pub struct Variant {
 }
 
 /// A shape with its 0° reference and the angles it must be cut at.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlyShape {
     pub shape: Shape,
     /// 0° reference axis in drawing coordinates, degrees.
@@ -78,7 +78,7 @@ pub enum MaterialKind {
     Twill,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Material {
     pub name: String,
@@ -119,7 +119,7 @@ impl Material {
 }
 
 /// A placed copy of a ply variant on the roll.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Placement {
     pub shape_idx: usize,
     pub variant_idx: usize,
@@ -140,7 +140,7 @@ impl Placement {
 
 /// Roll coordinates: x runs along the roll (0 = roll start, including lead trim),
 /// y across it (0 = one roll edge, roll_width = the other).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Layout {
     pub material: Material,
     pub placements: Vec<Placement>,

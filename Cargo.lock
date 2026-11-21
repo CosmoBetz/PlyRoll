@@ -3037,6 +3037,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "plyroll-core",
+ "plyroll-nest",
  "serde",
  "serde_json",
  "tauri",

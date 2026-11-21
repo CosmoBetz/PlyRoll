@@ -5,11 +5,18 @@
 //! moved. Re-importing a DXF keeps each part's 0° reference (matched by file
 //! and part name) and flags it for a re-check if the outline changed.
 //! Source paths are stored relative to the project file.
+//!
+//! The project also holds the job settings (material, time, sets) and the
+//! last nesting result together with the exact plies it was solved from, so
+//! a result can be checked and exported even after the plies were edited
+//! (it is then marked as out of date).
 
 use crate::geom::{Affine, BBox, FlattenMode, Path, Pt, signed_area};
 use crate::import::{ImportOptions, UnitsOverride, import_dxf};
 use crate::job::{RefSpec, make_names_unique, resolve_ref};
-use crate::model::{PlyShape, RefOrigin, Shape, Variant};
+use crate::job::validate_material;
+use crate::model::{Layout, Material, PlyShape, RefOrigin, Shape, Variant};
+use crate::report::{RunInfo, Summary};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -177,6 +184,69 @@ pub struct ImportReport {
     pub warnings: Vec<String>,
 }
 
+/// Nesting settings stored with the project.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct JobSettings {
+    /// Copy of the chosen library material, so the project nests the same
+    /// way later even if the library changes.
+    pub material: Option<Material>,
+    /// Optimisation time, seconds.
+    pub time_s: u64,
+    /// Complete layups to cut: every quantity is multiplied by this.
+    pub sets: u32,
+}
+
+impl Default for JobSettings {
+    fn default() -> Self {
+        Self { material: None, time_s: 60, sets: 1 }
+    }
+}
+
+pub const MAX_TIME_S: u64 = 3600;
+pub const MAX_SETS: u32 = 1000;
+
+/// Exactly what the solver is given.
+#[derive(Clone, Debug)]
+pub struct NestInput {
+    /// Plies with quantities already multiplied by the number of sets.
+    pub plies: Vec<PlyShape>,
+    /// Project ply id of each entry in `plies`.
+    pub ply_ids: Vec<u64>,
+    pub material: Material,
+    pub warnings: Vec<String>,
+    pub fingerprint: String,
+}
+
+/// A finished nest with the plies it was solved from. Placements index into
+/// `plies`, never into the live project, so later edits cannot scramble them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NestResult {
+    pub fingerprint: String,
+    pub plies: Vec<PlyShape>,
+    pub ply_ids: Vec<u64>,
+    pub layout: Layout,
+    pub summary: Summary,
+    pub run: RunInfo,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+impl NestResult {
+    pub fn new(input: NestInput, layout: Layout, run: RunInfo) -> Self {
+        let summary = crate::report::summarize(&input.plies, &layout);
+        NestResult { fingerprint: input.fingerprint, plies: input.plies, ply_ids: input.ply_ids, layout, summary, run, warnings: input.warnings }
+    }
+}
+
+/// Whether the stored result still matches the project.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Freshness {
+    pub fresh: bool,
+    /// Why it is out of date.
+    pub reason: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Project {
     pub version: u32,
@@ -186,11 +256,23 @@ pub struct Project {
     #[serde(default)]
     pub next_id: u64,
     pub plies: Vec<ProjectPly>,
+    #[serde(default)]
+    pub job: JobSettings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<NestResult>,
 }
 
 impl Project {
     pub fn new(name: impl Into<String>) -> Self {
-        Project { version: PROJECT_VERSION, name: name.into(), import: ImportSettings::default(), next_id: 1, plies: Vec::new() }
+        Project {
+            version: PROJECT_VERSION,
+            name: name.into(),
+            import: ImportSettings::default(),
+            next_id: 1,
+            plies: Vec::new(),
+            job: JobSettings::default(),
+            result: None,
+        }
     }
 
     pub fn load(path: &FsPath) -> Result<Project> {
@@ -204,6 +286,11 @@ impl Project {
             ply.shape.source_file = canon(&base.join(&ply.shape.source_file));
             p.next_id = p.next_id.max(ply.id + 1);
         }
+        if let Some(r) = &mut p.result {
+            for ply in &mut r.plies {
+                ply.shape.source_file = canon(&base.join(&ply.shape.source_file));
+            }
+        }
         Ok(p)
     }
 
@@ -214,6 +301,11 @@ impl Project {
         out.version = PROJECT_VERSION;
         for ply in &mut out.plies {
             ply.shape.source_file = relative_to(&ply.shape.source_file, &base);
+        }
+        if let Some(r) = &mut out.result {
+            for ply in &mut r.plies {
+                ply.shape.source_file = relative_to(&ply.shape.source_file, &base);
+            }
         }
         let text = serde_json::to_string_pretty(&out)?;
         let tmp = path.with_extension("plyroll.tmp");
@@ -447,7 +539,13 @@ impl Project {
     /// Plies ready for nesting. Plies without quantities are left out (with a
     /// warning); a missing or unconfirmed 0° reference is an error.
     pub fn to_plies(&self) -> Result<(Vec<PlyShape>, Vec<String>)> {
+        let (plies, _, warnings) = self.plies_with_ids()?;
+        Ok((plies, warnings))
+    }
+
+    fn plies_with_ids(&self) -> Result<(Vec<PlyShape>, Vec<u64>, Vec<String>)> {
         let mut out = Vec::new();
+        let mut ids = Vec::new();
         let mut warnings = Vec::new();
         let mut blocked = Vec::new();
         for p in &self.plies {
@@ -456,13 +554,16 @@ impl Project {
                 continue;
             }
             match (p.reference, p.confirmed) {
-                (Some(r), true) => out.push(PlyShape {
-                    shape: p.shape.clone(),
-                    ref_deg: r.deg,
-                    ref_origin: r.origin,
-                    cosmetic: p.cosmetic,
-                    variants: p.variants.iter().filter(|v| v.qty > 0).cloned().collect(),
-                }),
+                (Some(r), true) => {
+                    ids.push(p.id);
+                    out.push(PlyShape {
+                        shape: p.shape.clone(),
+                        ref_deg: r.deg,
+                        ref_origin: r.origin,
+                        cosmetic: p.cosmetic,
+                        variants: p.variants.iter().filter(|v| v.qty > 0).cloned().collect(),
+                    })
+                }
                 (None, _) => blocked.push(format!("{} (no 0° reference)", p.shape.name)),
                 (Some(_), false) => blocked.push(format!("{} ({})", p.shape.name, p.note.as_deref().unwrap_or("0° reference not confirmed"))),
             }
@@ -474,8 +575,75 @@ impl Project {
             bail!("no plies with quantities in the project");
         }
         make_names_unique(&mut out);
-        Ok((out, warnings))
+        Ok((out, ids, warnings))
     }
+
+    /// The solver input for this project: confirmed plies with quantities
+    /// times the number of sets, and the project material (or `material`).
+    pub fn nest_input(&self, material: Option<&Material>) -> Result<NestInput> {
+        let material = match material.or(self.job.material.as_ref()) {
+            Some(m) => m.clone(),
+            None => bail!("choose a material for this project first"),
+        };
+        validate_material(&material)?;
+        let sets = self.job.sets.max(1);
+        let (mut plies, ply_ids, warnings) = self.plies_with_ids()?;
+        if sets > 1 {
+            for p in &mut plies {
+                for v in &mut p.variants {
+                    v.qty *= sets;
+                }
+            }
+        }
+        let fingerprint = fingerprint(&plies, &ply_ids, &material);
+        Ok(NestInput { plies, ply_ids, material, warnings, fingerprint })
+    }
+
+    /// Is the stored result still what nesting the project now would solve?
+    pub fn freshness(&self) -> Option<Freshness> {
+        self.result.as_ref().map(|r| self.check_result(r))
+    }
+
+    /// Like `freshness`, for a result kept outside the project.
+    pub fn check_result(&self, r: &NestResult) -> Freshness {
+        match self.nest_input(None) {
+            Ok(input) if input.fingerprint == r.fingerprint => Freshness { fresh: true, reason: None },
+            Ok(_) => Freshness { fresh: false, reason: Some("plies, quantities, sets or material changed since this nest".into()) },
+            Err(e) => Freshness { fresh: false, reason: Some(format!("{e:#}")) },
+        }
+    }
+
+    pub fn set_job(&mut self, job: JobSettings) -> Result<()> {
+        if job.sets == 0 || job.sets > MAX_SETS {
+            bail!("sets must be between 1 and {MAX_SETS}");
+        }
+        if job.time_s == 0 || job.time_s > MAX_TIME_S {
+            bail!("time must be between 1 s and {MAX_TIME_S} s");
+        }
+        if let Some(m) = &job.material {
+            validate_material(m)?;
+        }
+        self.job = job;
+        Ok(())
+    }
+}
+
+/// Identifies a solver input. Source paths and how the 0° was picked do not
+/// change the nest, so they are left out (a moved project keeps its result).
+fn fingerprint(plies: &[PlyShape], ids: &[u64], material: &Material) -> String {
+    let mut plies = plies.to_vec();
+    for p in &mut plies {
+        p.shape.source_file = PathBuf::new();
+        p.ref_origin = RefOrigin::Manual;
+    }
+    let json = serde_json::to_string(&(&plies, ids, material)).unwrap_or_default();
+    // FNV-1a, 64 bit: stable across Rust versions, unlike DefaultHasher.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in json.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{h:016x}")
 }
 
 /// Axis direction normalised to (−90, 90]; fibre axes are symmetric under 180°.

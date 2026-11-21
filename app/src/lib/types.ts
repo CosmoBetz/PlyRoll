@@ -48,6 +48,11 @@ export interface Ply {
   edges: Edge[];
 }
 
+export interface Readiness {
+  ok: boolean;
+  message: string;
+}
+
 export interface AppView {
   name: string;
   path: string | null;
@@ -55,7 +60,122 @@ export interface AppView {
   can_undo: boolean;
   can_redo: boolean;
   plies: Ply[];
-  ready: { ok: boolean; message: string };
+  ready: Readiness;
+  job: JobSettings;
+  /** Plies ready and a material chosen. */
+  nest_ready: Readiness;
+  result: ResultView | null;
+  /** Id of the running nest. */
+  running: number | null;
+}
+
+export type MaterialKind = "ud" | "twill";
+
+/** plyroll-core model.rs Material; lengths in mm, angles in degrees. */
+export interface Material {
+  name: string;
+  kind: MaterialKind;
+  roll_width: number;
+  edge_trim: number;
+  lead_trim: number;
+  spacing: number;
+  angle_tolerance: number;
+  tolerance_step: number;
+  warp_weft_interchangeable: boolean;
+  cost_per_m2: number | null;
+}
+
+export interface JobSettings {
+  material: Material | null;
+  time_s: number;
+  sets: number;
+}
+
+export interface LibraryView {
+  path: string;
+  materials: Material[];
+  error: string | null;
+}
+
+export interface VerifyReport {
+  ok: boolean;
+  issues: string[];
+  min_gap: number | null;
+  max_fibre_deviation: number;
+}
+
+export interface Summary {
+  used_length_mm: number;
+  roll_area_m2: number;
+  parts_area_m2: number;
+  utilization_of_roll: number;
+  utilization_of_usable_area: number;
+  material_cost: number | null;
+  plies: number;
+  verification: VerifyReport;
+}
+
+export interface RunInfo {
+  seed: number;
+  solve_seconds: number;
+  stopped: boolean;
+}
+
+export interface ShapeGeom {
+  name: string;
+  outline: XY[];
+  holes: XY[][];
+}
+
+export interface LayoutShapes {
+  material: Material;
+  shapes: ShapeGeom[];
+}
+
+/** Roll point = rotate(p, rotation°) + (tx, ty). */
+export interface Placement {
+  shape: number;
+  angle: number;
+  kit: string | null;
+  copy: number;
+  rotation: number;
+  tx: number;
+  ty: number;
+  /** Fibre direction on the roll, degrees from the roll axis. */
+  fibre: number;
+  label: string;
+}
+
+export interface ResultView {
+  fresh: boolean;
+  stale_reason: string | null;
+  summary: Summary;
+  run: RunInfo;
+  warnings: string[];
+  used_length: number;
+  shapes: LayoutShapes;
+  placements: Placement[];
+}
+
+export interface NestStarted {
+  run: number;
+  time_s: number;
+  shapes: LayoutShapes;
+}
+
+export interface NestProgress {
+  run: number;
+  phase: string;
+  length: number;
+  density: number;
+  elapsed: number;
+  placements: Placement[] | null;
+}
+
+export interface NestDone {
+  run: number;
+  error: string | null;
+  stopped: boolean;
 }
 
 export interface ImportReport {
@@ -76,3 +196,16 @@ export type RefPick =
   | { kind: "points"; a: { x: number; y: number }; b: { x: number; y: number } }
   | { kind: "rotate"; delta: number }
   | { kind: "confirm" };
+
+/** UI state of a running nest. */
+export interface LiveNest {
+  run: number;
+  time_s: number;
+  shapes: LayoutShapes;
+  placements: Placement[] | null;
+  length: number | null;
+  density: number | null;
+  elapsed: number;
+  phase: string;
+  stopping: boolean;
+}

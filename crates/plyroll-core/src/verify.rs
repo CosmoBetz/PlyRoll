@@ -5,14 +5,14 @@ use crate::geom::{BBox, FlattenMode, Pt};
 use crate::model::{Layout, PlyShape};
 use crate::orient::{fibre_deviation, fibre_ok};
 use geo::{Coord, Distance, Euclidean, LineString, Polygon};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Flattening tolerance used for checking, mm.
 const CHECK_TOL: f64 = 0.005;
 /// Slack for flattening and the solver's f32 arithmetic, mm.
 const EPS: f64 = 0.02;
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VerifyReport {
     pub ok: bool,
     pub issues: Vec<String>,

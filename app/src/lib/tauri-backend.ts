@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { listen } from "@tauri-apps/api/event";
 import { open, save, ask } from "@tauri-apps/plugin-dialog";
 import type { Backend } from "./backend";
-import type { AppView, ImportReport } from "./types";
+import type { AppView, ImportReport, LibraryView, NestDone, NestProgress, NestStarted } from "./types";
 
 type Imported = { view: AppView; report: ImportReport };
 
@@ -23,6 +24,22 @@ export const tauriBackend: Backend = {
   remove: (ids) => invoke<AppView>("remove_plies", { ids }),
   undo: () => invoke<AppView>("undo"),
   redo: () => invoke<AppView>("redo"),
+  setJob: (job) => invoke<AppView>("set_job", { job }),
+  library: () => invoke<LibraryView>("get_library"),
+  saveMaterial: (original, material) => invoke<LibraryView>("save_material", { original, material }),
+  deleteMaterial: (name) => invoke<LibraryView>("delete_material", { name }),
+  importMaterials: (path) => invoke<LibraryView>("import_materials", { path }),
+  startNest: () => invoke<NestStarted>("start_nest"),
+  stopNest: () => invoke<void>("stop_nest"),
+  async onNest(on) {
+    const a = await listen<NestProgress>("nest-progress", (e) => on.progress(e.payload));
+    const b = await listen<NestDone>("nest-done", (e) => on.done(e.payload));
+    return () => {
+      a();
+      b();
+    };
+  },
+  exportResult: (dir) => invoke<string[]>("export_result", { dir }),
 
   async pickProjectToOpen() {
     const r = await open({ multiple: false, directory: false, filters: [{ name: "PlyRoll project", extensions: ["plyroll"] }] });
@@ -35,6 +52,14 @@ export const tauriBackend: Backend = {
     const r = await open({ multiple: true, directory: false, filters: [{ name: "DXF drawing", extensions: ["dxf", "DXF"] }] });
     if (!r) return [];
     return Array.isArray(r) ? r : [r];
+  },
+  async pickMaterialsFile() {
+    const r = await open({ multiple: false, directory: false, filters: [{ name: "Material library", extensions: ["toml"] }] });
+    return typeof r === "string" ? r : null;
+  },
+  async pickFolder(defaultPath) {
+    const r = await open({ multiple: false, directory: true, title: "Folder for the cut files", defaultPath });
+    return typeof r === "string" ? r : null;
   },
   confirm: (message, okLabel = "OK") => ask(message, { title: "PlyRoll", kind: "warning", okLabel, cancelLabel: "Cancel" }),
   async onFileDrop(cb) {

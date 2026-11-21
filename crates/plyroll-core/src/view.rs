@@ -96,3 +96,97 @@ pub fn ply_view(p: &ProjectPly) -> PlyView {
 pub fn project_view(p: &Project) -> Vec<PlyView> {
     p.plies.iter().map(ply_view).collect()
 }
+
+/// Outline of one solver ply, drawing coordinates.
+#[derive(Clone, Debug, Serialize)]
+pub struct ShapeGeom {
+    pub name: String,
+    pub outline: Vec<[f64; 2]>,
+    pub holes: Vec<Vec<[f64; 2]>>,
+}
+
+/// One placed copy. Roll coordinates of a point p: rotate p by `rotation`
+/// degrees about the origin, then add (tx, ty).
+#[derive(Clone, Debug, Serialize)]
+pub struct PlacementView {
+    /// Index into `LayoutShapes::shapes`.
+    pub shape: usize,
+    /// Ply angle of the variant, degrees from the part's 0°.
+    pub angle: f64,
+    pub kit: Option<String>,
+    pub copy: u32,
+    pub rotation: f64,
+    pub tx: f64,
+    pub ty: f64,
+    /// Fibre (or warp) direction on the roll, degrees from the roll axis, (−90, 90].
+    pub fibre: f64,
+    pub label: String,
+}
+
+/// The parts of a nest that do not change while it runs.
+#[derive(Clone, Debug, Serialize)]
+pub struct LayoutShapes {
+    pub material: crate::model::Material,
+    pub shapes: Vec<ShapeGeom>,
+}
+
+pub fn layout_shapes(plies: &[crate::model::PlyShape], material: &crate::model::Material) -> LayoutShapes {
+    let shapes = plies
+        .iter()
+        .map(|p| {
+            let bb = BBox::of(&p.shape.outer.flatten(0.1, FlattenMode::Inscribed));
+            let tol = (bb.width().max(bb.height()) * 0.0005).clamp(0.02, 0.5);
+            ShapeGeom { name: p.shape.name.clone(), outline: pts(&p.shape.outer, tol), holes: p.shape.holes.iter().map(|h| pts(h, tol)).collect() }
+        })
+        .collect();
+    LayoutShapes { material: material.clone(), shapes }
+}
+
+pub fn placement_views(plies: &[crate::model::PlyShape], layout: &crate::model::Layout) -> Vec<PlacementView> {
+    layout
+        .placements
+        .iter()
+        .map(|pl| {
+            let p = &plies[pl.shape_idx];
+            let v = &p.variants[pl.variant_idx];
+            PlacementView {
+                shape: pl.shape_idx,
+                angle: v.angle_deg,
+                kit: v.kit.clone(),
+                copy: pl.copy,
+                rotation: pl.rotation_deg,
+                tx: pl.tx,
+                ty: pl.ty,
+                fibre: crate::project::norm_axis(p.fibre_deg(v) + pl.rotation_deg),
+                label: crate::export::label_text(p, pl),
+            }
+        })
+        .collect()
+}
+
+/// A stored nest result for display.
+#[derive(Clone, Debug, Serialize)]
+pub struct ResultView {
+    pub fresh: bool,
+    pub stale_reason: Option<String>,
+    pub summary: crate::report::Summary,
+    pub run: crate::report::RunInfo,
+    pub warnings: Vec<String>,
+    pub used_length: f64,
+    pub shapes: LayoutShapes,
+    pub placements: Vec<PlacementView>,
+}
+
+pub fn result_view(project: &Project, r: &crate::project::NestResult) -> ResultView {
+    let f = project.check_result(r);
+    ResultView {
+        fresh: f.fresh,
+        stale_reason: f.reason,
+        summary: r.summary.clone(),
+        run: r.run.clone(),
+        warnings: r.warnings.clone(),
+        used_length: r.layout.used_length,
+        shapes: layout_shapes(&r.plies, &r.layout.material),
+        placements: placement_views(&r.plies, &r.layout),
+    }
+}

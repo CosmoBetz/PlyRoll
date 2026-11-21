@@ -3,7 +3,7 @@
 Free, local nesting for carbon-fibre prepreg plies on an endless roll.
 Every ply keeps its fibre direction (UD) or warp direction (twill); plies are never flipped.
 
-Status: **Phase 1 command-line tool; Phase 2 orientation editor (desktop app) started.** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
+Status: **Phase 1 command-line tool; Phase 2 desktop app with orientation editor, material library and nesting. Reports are next.** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
 Nesting is done by [sparrow](https://github.com/JeroenGar/sparrow) on top of
 [jagua-rs](https://github.com/JeroenGar/jagua-rs).
 
@@ -34,10 +34,10 @@ cargo run -p plyroll-core --example make_samples -- examples/demo/samples
 `check` only imports the job and writes `orientation.svg`, which shows each shape's 0° axis (dashed) and the fibre
 direction of every angle variant (coloured hatching). Look at it before nesting.
 
-## Orientation editor (desktop app)
+## Desktop app
 
-A Tauri app for setting each ply's 0° direction by eye and listing its ply angles.
-It saves a `.plyroll` project (JSON). The CLI nests that project directly.
+A Tauri app for setting each ply's 0° direction by eye, listing its ply angles, and nesting the job.
+It saves a `.plyroll` project (JSON) with the job settings and the last result. The CLI nests that project directly.
 
 Needs Node.js 20.19+ as well as Rust. On macOS, the Xcode command-line tools are enough.
 
@@ -63,10 +63,24 @@ How to use it:
 4. Badges show *no 0°*, *check 0°* (outline changed in the DXF, or mirrored) and *0° set*.
    **N** jumps to the next ply that needs attention; **Enter** confirms.
    Select several plies (⌘/⇧-click) to apply a rule or angle list to all of them.
-5. Save, then nest:
+5. Switch to **Nest** (⌘2; ⌘1 goes back to the plies).
+
+Nesting:
+
+1. Pick a material, or **Manage materials…** to add one. The library is shared by all projects and uses the same
+   TOML format as the CLI. The project keeps its own copy of the material. If the library entry changes later, the app
+   offers to use the new version.
+2. Choose a time (30 s / 2 min / 10 min or seconds) and the number of **sets** (complete layups; multiplies every quantity).
+3. **Nest.** The roll view shows the best layout so far, with fibre hatching per ply (zoom in) and the used length.
+   **Stop and keep best** ends early and keeps a complete, verified layout.
+4. The result is saved with the project. Changing plies, quantities, sets or material marks it *out of date*.
+   Export is then disabled until you nest again. Undo brings it back.
+5. **Export cut files…** writes the same files as the CLI (see [Output](#output)) to a folder you pick.
+
+Or nest the saved project from the command line. It uses the project's material, time and sets:
 
 ```bash
-./target/release/plyroll nest my-job.plyroll -m UD-T700-150 -o out/my-job
+./target/release/plyroll nest my-job.plyroll -o out/my-job
 ```
 
 **Reload DXFs** re-reads every file. 0° references are kept, and parts whose outline changed are flagged for a check.
@@ -114,6 +128,10 @@ cost_per_m2 = 45.0     # optional
 ```
 
 By default the file `materials.toml` next to the job CSV is used; `--materials` overrides it.
+For a CSV job `-m` is required. For a `.plyroll` project it is optional once a material is picked in the app (`-m` then overrides it).
+
+The desktop app keeps its library in the same format, at
+`~/Library/Application Support/org.plyroll.desktop/materials.toml` on macOS. Pass it to the CLI with `--materials`.
 
 Allowed placement rotations:
 - **UD and default twill:** fibre/warp along the roll, turned by 0° or 180°.
@@ -145,7 +163,8 @@ are ignored.
 
 ## Known limits
 
-- The desktop app only covers the orientation editor so far. Nesting, materials and reports are still in the CLI.
+- No PDF report or kit checklist yet (`report.json` and `plies.csv` hold the data).
+- No manual editing of a layout, and no warm start from a previous result.
 - No PDF output yet. The SVG prints at true size.
 - Parts are not nested inside other parts' holes.
 - DXF table headers have no handles (a quirk of the `dxf` crate writer). ezdxf and PlyRoll read the files fine.

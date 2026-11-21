@@ -70,7 +70,7 @@ fn material(kind: MaterialKind, swap: bool) -> Material {
 }
 
 fn opts() -> NestOptions {
-    NestOptions { time: Duration::from_secs(4), seed: Some(7), workers: 2, early_stop: true, nest_tol: 0.05 }
+    NestOptions { time: Duration::from_secs(4), seed: Some(7), workers: 2, early_stop: true, nest_tol: 0.05, live_layout: None }
 }
 
 #[test]
@@ -124,4 +124,37 @@ fn too_wide_ply_is_rejected_with_a_clear_message() {
     plies[0].shape.outer = rounded_rect(900.0, 500.0, 10.0, 0.0, 0.0);
     let err = build_groups(&plies, &material(MaterialKind::Ud, false)).unwrap_err().to_string();
     assert!(err.contains("does not fit across the roll"), "{err}");
+}
+
+#[test]
+fn live_layouts_are_complete_and_verify() {
+    let plies = plies();
+    let mat = material(MaterialKind::Ud, false);
+    let o = NestOptions { time: Duration::from_secs(3), early_stop: false, live_layout: Some(Duration::ZERO), ..opts() };
+    let mut live = Vec::new();
+    let layout = nest(&plies, &mat, &o, |p| live.extend(p.layout.clone()), Arc::new(AtomicBool::new(false))).expect("nest");
+    assert!(!live.is_empty(), "no live layouts reported");
+    for l in live.iter().chain([&layout]) {
+        let r = verify(&plies, l);
+        assert!(r.ok, "live layout failed verification: {:?}", r.issues);
+    }
+}
+
+#[test]
+fn stop_right_away_still_gives_a_complete_layout() {
+    let plies = plies();
+    let mat = material(MaterialKind::Ud, false);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let c = cancel.clone();
+    let stopper = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        c.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+    let t = std::time::Instant::now();
+    let layout = nest(&plies, &mat, &NestOptions { time: Duration::from_secs(60), early_stop: false, ..opts() }, |_| {}, cancel).expect("nest");
+    stopper.join().unwrap();
+    assert!(t.elapsed() < Duration::from_secs(10), "stop took {:?}", t.elapsed());
+    let r = verify(&plies, &layout);
+    assert!(r.ok, "{:?}", r.issues);
+    assert_eq!(layout.placements.len(), 14);
 }
