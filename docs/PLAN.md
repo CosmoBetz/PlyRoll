@@ -1,9 +1,9 @@
-# TurboNest — plan for a free, local 2D nesting tool for prepreg plies
+# PlyRoll — plan for a free, local 2D nesting tool for prepreg plies
 
 Status: revised 2026-11-21. **Phase 1 (CLI) is built.** See the README for usage.
 
 **Phase 1 as built (differences from the plan below):**
-- **Crates:** three instead of nine. `turbonest-core` holds geometry, import, model, orient, job, verify and export as modules. `turbonest-nest` is the sparrow adapter, the only crate that touches the solver. `turbonest-cli` is the `turbonest` binary. Modules can be split into crates later if needed.
+- **Crates:** three instead of nine. `plyroll-core` holds geometry, import, model, orient, job, verify and export as modules. `plyroll-nest` is the sparrow adapter, the only crate that touches the solver. `plyroll-cli` is the `plyroll` binary. Modules can be split into crates later if needed.
 - **Solver versions:** sparrow is pinned to git commit `b8ef033`, because it is not on crates.io. It already uses jagua-rs 2.0.0, not 1.0.0 as its README says.
 - **Edge spacing:** jagua-rs keeps items one full `spacing` away from the strip boundary. The adapter compensates, so plies may touch the trim lines.
 - **Rotations:** solver rotations (f32) are snapped back to the exact allowed angle around the part's centre.
@@ -12,14 +12,14 @@ Status: revised 2026-11-21. **Phase 1 (CLI) is built.** See the README for usage
 
 **Decided so far:**
 - The cutter works from an endless roll (conveyor), so the whole job is nested as one continuous strip.
-- The CAD export does not give the right fibre direction, so the 0° direction is set per ply shape in TurboNest.
+- The CAD export does not give the right fibre direction, so the 0° direction is set per ply shape in PlyRoll.
 - Plies are never flipped.
 - A ply shape may be needed at several angles, including both + and −.
 - Materials are UD and twill.
 
 ## 1. Goal
 
-TurboNest takes the flat ply patterns exported from CAD, arranges them on a prepreg roll using as little material as possible, and writes cut files that a cutter (or a person with a knife and templates) can use. It runs on your own machine, needs no account, and is open source.
+PlyRoll takes the flat ply patterns exported from CAD, arranges them on a prepreg roll using as little material as possible, and writes cut files that a cutter (or a person with a knife and templates) can use. It runs on your own machine, needs no account, and is open source.
 
 It replaces Nest & Cut for one use: **cutting carbon-fibre prepreg plies from rolls**. It does not try to cover everything Nest & Cut does. Most of Nest & Cut's CAM features are for thermal cutting of sheet metal (laser, plasma, oxy-fuel) and do not apply to prepreg (see §4).
 
@@ -73,7 +73,7 @@ If sparrow gets close to Nest & Cut, the plan below holds. If it is clearly wors
 
 Source: [Nest & Cut feature page](https://nestandcut.com/nesting-software-features/), [CAM features](https://nestandcut.com/essential-cam-features/), [FAQ](https://nestandcut.com/frequently-asked-questions/features-users/).
 
-| Nest & Cut feature | For prepreg | TurboNest |
+| Nest & Cut feature | For prepreg | PlyRoll |
 |---|---|---|
 | DXF/DWG import with automatic cleanup (gap closing, self-intersections, bad arcs) | **Essential** | Keep: DXF native. DWG only through the free external ODA File Converter if installed. |
 | Several parts per DXF; identical parts detected even if rotated | Useful | Keep (rotation only, never mirrored) |
@@ -179,7 +179,7 @@ Export is blocked otherwise.
   - Solver items are merged only when the outline, θ in the shape's own frame, and the allowed-rotation set all match (see the twill ±45 case in §5.1).
   - Mirrored outlines are never merged.
   - Each ply keeps its own ID for labels, kits and reports.
-- Holes: jagua-rs/sparrow **reject items with holes**. TurboNest nests the outer outline and keeps the holes for cutting.
+- Holes: jagua-rs/sparrow **reject items with holes**. PlyRoll nests the outer outline and keeps the holes for cutting.
 - SVG import (P1). DWG import through ODA File Converter if it is installed (P2).
 
 ### 5.3 Materials, rolls, stock — P0/P1
@@ -237,7 +237,7 @@ Output layers or channels: `CUT`, `MARK` (pen/inkjet: ply ID and fibre arrow), `
 - Job history (P2): material used over time.
 
 ### 5.8 Project files and data — P0
-- One project file `*.tnest` (JSON) with the source geometry, ply metadata, job settings and solutions, so a project opens again exactly as it was.
+- One project file `*.plyroll` (JSON) with the source geometry, ply metadata, job settings and solutions, so a project opens again exactly as it was.
 - Everything is local. No telemetry.
 - A command line interface (CLI) runs the same pipeline without the GUI (for scripting and batch jobs).
 
@@ -260,15 +260,15 @@ flowchart LR
   UI <-->|commands / events| CORE
 
   subgraph CORE["Rust workspace"]
-    IO[tn-import<br/>DXF/SVG/CSV → raw geometry]
-    GEO[tn-geom<br/>cleanup, loops, flatten, offset, signatures]
-    DOM[tn-model<br/>Project, PlyShape, Variant, Material, Roll, Job, Solution]
-    ORI[tn-orient<br/>0° ref + variant + material → allowed rotations, item merging]
-    NEST[tn-nest<br/>Nester trait + sparrow adapter]
-    VER[tn-verify<br/>independent overlap / fibre / bounds checks]
-    SEQ[tn-sequence<br/>cut order, labels, knife params]
-    OUT[tn-export<br/>DXF, SVG, PDF, HPGL, G-code templates]
-    CLI[tn-cli]
+    IO[plyroll-import<br/>DXF/SVG/CSV → raw geometry]
+    GEO[plyroll-geom<br/>cleanup, loops, flatten, offset, signatures]
+    DOM[plyroll-model<br/>Project, PlyShape, Variant, Material, Roll, Job, Solution]
+    ORI[plyroll-orient<br/>0° ref + variant + material → allowed rotations, item merging]
+    NEST[plyroll-nest<br/>Nester trait + sparrow adapter]
+    VER[plyroll-verify<br/>independent overlap / fibre / bounds checks]
+    SEQ[plyroll-sequence<br/>cut order, labels, knife params]
+    OUT[plyroll-export<br/>DXF, SVG, PDF, HPGL, G-code templates]
+    CLI[plyroll-cli]
   end
   IO --> GEO --> DOM
   DOM --> ORI --> NEST --> VER --> SEQ --> OUT
@@ -290,12 +290,12 @@ flowchart LR
 | Templates | `minijinja` | G-code and HPGL post-processors as user-editable templates. |
 
 ### 6.2 Important design rules
-- **The solver sits behind an adapter.** `trait Nester { fn solve(job, budget, progress_cb, cancel) -> Solution }`, with `SparrowNester` as the first implementation. sparrow and jagua-rs are on fast-moving major versions (jagua-rs 1.0 broke the JSON format; 2.0 replaced the collision index). Pin exact versions and keep all solver-specific code in `tn-nest`.
+- **The solver sits behind an adapter.** `trait Nester { fn solve(job, budget, progress_cb, cancel) -> Solution }`, with `SparrowNester` as the first implementation. sparrow and jagua-rs are on fast-moving major versions (jagua-rs 1.0 broke the JSON format; 2.0 replaced the collision index). Pin exact versions and keep all solver-specific code in `plyroll-nest`.
 - **Keep two kinds of geometry.**
   - Exact source geometry (arcs, splines, holes) is used for output.
   - Simplified nesting geometry (flattened outer outline, slightly inflated) goes to the solver.
   - Placements are transforms (rotation and translation only) applied to the exact geometry.
-- **Check the result independently.** `tn-verify` re-checks every solution with exact polygon booleans, separate from the solver:
+- **Check the result independently.** `plyroll-verify` re-checks every solution with exact polygon booleans, separate from the solver:
   - no overlaps (spacing respected)
   - inside the usable width
   - fibre angle correct
@@ -349,7 +349,7 @@ Confirmed from the jagua-rs 1.0 release notes and the sparrow README:
 | Phase | Scope | Done when |
 |---|---|---|
 | **0. Check the engine** | §3: compare sparrow studio with Nest & Cut on your jobs | Comparison recorded; benchmark set saved in `bench/` |
-| **1. CLI MVP** | Rust workspace; DXF import + cleanup; ply shape / variant model; allowed rotations from 0° ref + angle + material; sparrow adapter; verifier; DXF/SVG/PDF export with labels. 0° refs and variants come from a small CSV (`file, ref_deg, angles×qty`) until the GUI exists. | `turbonest nest job.csv --material T700-UD-300 --out job.dxf` produces a verified, cuttable layout for a real job |
+| **1. CLI MVP** | Rust workspace; DXF import + cleanup; ply shape / variant model; allowed rotations from 0° ref + angle + material; sparrow adapter; verifier; DXF/SVG/PDF export with labels. 0° refs and variants come from a small CSV (`file, ref_deg, angles×qty`) until the GUI exists. | `plyroll nest job.csv --material T700-UD-300 --out job.dxf` produces a verified, cuttable layout for a real job |
 | **2. Desktop app** | Tauri UI, **orientation editor first** (thumbnail grid, click-edge-for-0°, fibre hatching, variant table); then material library, live nesting view, project save/load, reports | You prepare and run a real production job without touching CSV |
 | **3. Shop features** | Manual editing + locking, kit-grouped mode, cut sequencing, HPGL / G-code templates for *your* cutter, 1:1 tiled templates, roll inventory | You cancel the Nest & Cut subscription |
 | **4. Extras** | Remnants (bin packing), defect zones, inside-hole nesting, splitting large plies, projector mode, more cutter formats | As needed |
@@ -363,12 +363,12 @@ Confirmed from the jagua-rs 1.0 release notes and the sparrow README:
   - A mirrored outline never matches its original.
   - The verifier catches a hand-made wrong placement.
 - **Golden corpus:** real DXFs from your CAD, including bad ones (gaps, overlaps, splines, blocks), with expected cleanup results.
-- **Solution invariants:** on every benchmark run, `tn-verify` must pass (no overlap, inside width, fibre correct).
+- **Solution invariants:** on every benchmark run, `plyroll-verify` must pass (no overlap, inside width, fibre correct).
 - **Benchmark regression:** utilization and length on the saved jobs, tracked in CI with fixed seeds.
 - **Output check:** exported DXF/HPGL re-imported and compared to the solution; one dry run on the cutter (pen instead of knife) per new post-processor.
 
 ### Licensing
-- TurboNest: **MIT or Apache-2.0** (compatible with sparrow, MIT, and jagua-rs, MPL-2.0).
+- PlyRoll: **MIT or Apache-2.0** (compatible with sparrow, MIT, and jagua-rs, MPL-2.0).
   - MPL-2.0 is file-level copyleft. Changes made *to jagua-rs files* must be shared; our own code is unaffected.
 - Avoid GPL dependencies (for example LibreDWG) unless the project itself is GPL. DWG support goes through the external ODA converter instead.
 

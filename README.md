@@ -1,4 +1,4 @@
-# TurboNest
+# PlyRoll
 
 Free, local nesting for carbon-fibre prepreg plies on an endless roll.
 Every ply keeps its fibre direction (UD) or warp direction (twill); plies are never flipped.
@@ -15,20 +15,20 @@ Needs Rust (install from <https://rustup.rs>).
 cargo build --release
 ```
 
-The binary is `target/release/turbonest`.
+The binary is `target/release/plyroll`.
 
 ## Quick start (demo job)
 
 ```bash
-cargo run -p turbonest-core --example make_samples -- examples/demo/samples
+cargo run -p plyroll-core --example make_samples -- examples/demo/samples
 ```
 
 ```bash
-./target/release/turbonest check examples/demo/job.csv -m UD-T700-150 -o out/demo
+./target/release/plyroll check examples/demo/job.csv -m UD-T700-150 -o out/demo
 ```
 
 ```bash
-./target/release/turbonest nest examples/demo/job.csv -m UD-T700-150 -o out/demo --time 60
+./target/release/plyroll nest examples/demo/job.csv -m UD-T700-150 -o out/demo --time 60
 ```
 
 `check` only imports the job and writes `orientation.svg`, which shows each shape's 0° axis (dashed) and the fibre
@@ -56,7 +56,7 @@ plies/skin.dxf,12.5,0x2 90x1,yes,,A,Skin-outer
 The fibre direction of a variant in the drawing is `ref + angle`, counter-clockwise positive, as seen in the drawing.
 A shape with no usable `ref` stops the job; there is no silent default.
 
-`turbonest inspect plies/*.dxf` lists every part with its size, longest straight edge (and its angle), holes and any fibre-layer line. Use it to pick `ref` values.
+`plyroll inspect plies/*.dxf` lists every part with its size, longest straight edge (and its angle), holes and any fibre-layer line. Use it to pick `ref` values.
 
 ## Materials (TOML)
 
@@ -109,7 +109,7 @@ are ignored.
 - No GUI yet. The 0° reference comes from the CSV (the orientation editor is Phase 2).
 - No PDF output yet. The SVG prints at true size.
 - Parts are not nested inside other parts' holes.
-- DXF table headers have no handles (a quirk of the `dxf` crate writer). ezdxf and TurboNest read the files fine.
+- DXF table headers have no handles (a quirk of the `dxf` crate writer). ezdxf and PlyRoll read the files fine.
   Check that your cutter software does too.
 
 ## Tests
@@ -117,3 +117,13 @@ are ignored.
 ```bash
 cargo test --release
 ```
+
+## License
+
+PlyRoll is released under the [MIT License](LICENSE).
+
+Its dependencies keep their own licenses. Notably:
+- [sparrow](https://github.com/JeroenGar/sparrow) is MIT.
+- [jagua-rs](https://github.com/JeroenGar/jagua-rs) is MPL-2.0. That is file-level copyleft: changes to jagua-rs's own files must be shared under MPL-2.0. PlyRoll's code is not affected.
+
+If you distribute PlyRoll binaries, include these license notices.

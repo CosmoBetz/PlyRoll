@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/turbonest-core", "crates/turbonest-nest", "crates/turbonest-cli"]
+members = ["crates/plyroll-core", "crates/plyroll-nest", "crates/plyroll-cli"]
 
 [workspace.package]
 version = "0.1.0"

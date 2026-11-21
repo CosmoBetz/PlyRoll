@@ -1,13 +1,13 @@
-//! Adapter between TurboNest's ply model and the sparrow strip-packing solver.
+//! Adapter between PlyRoll's ply model and the sparrow strip-packing solver.
 //!
 //! All solver-specific code lives here so the solver can be upgraded or
-//! replaced without touching the rest of TurboNest.
+//! replaced without touching the rest of PlyRoll.
 //!
 //! Coordinate notes:
 //! - The roll runs along +x; the strip's fixed height is the usable roll width.
 //! - jagua-rs keeps items `min_item_separation` away from the strip boundary
 //!   (items inflated and the strip deflated by half the separation each).
-//!   Parts may touch the trim lines in TurboNest, so the strip is made
+//!   Parts may touch the trim lines in PlyRoll, so the strip is made
 //!   `2 * spacing` taller and the result shifted back by `spacing`.
 //! - Shapes are centred before they are handed to the solver (f32 inside),
 //!   and solver rotations are snapped back to the exact allowed angle.
@@ -27,12 +27,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use turbonest_core::geom::{Affine, BBox, FlattenMode, Pt, norm_deg};
-use turbonest_core::model::{Layout, Material, Placement, PlyShape};
-use turbonest_core::orient::{allowed_rotations, rotation_key};
-use turbonest_core::verify::placed_outlines;
+use plyroll_core::geom::{Affine, BBox, FlattenMode, Pt, norm_deg};
+use plyroll_core::model::{Layout, Material, Placement, PlyShape};
+use plyroll_core::orient::{allowed_rotations, rotation_key};
+use plyroll_core::verify::placed_outlines;
 
-pub use turbonest_core;
+pub use plyroll_core;
 
 #[derive(Clone, Debug)]
 pub struct NestOptions {
@@ -193,12 +193,12 @@ pub fn build_instance(plies: &[PlyShape], material: &Material, groups: &[ItemGro
             }
         })
         .collect();
-    ExtSPInstance { name: "turbonest".into(), min_item_separation: s as f32, items, strip_height: (material.usable_width() + 2.0 * s) as f32 }
+    ExtSPInstance { name: "plyroll".into(), min_item_separation: s as f32, items, strip_height: (material.usable_width() + 2.0 * s) as f32 }
 }
 
 /// Nests all plies on one roll. Returns a layout in roll coordinates.
 pub fn nest(plies: &[PlyShape], material: &Material, opts: &NestOptions, mut on_progress: impl FnMut(&Progress), cancel: Arc<AtomicBool>) -> Result<Layout> {
-    turbonest_core::job::validate_material(material)?;
+    plyroll_core::job::validate_material(material)?;
     let groups = build_groups(plies, material)?;
     let ext = build_instance(plies, material, &groups, opts.nest_tol);
 

@@ -3,7 +3,7 @@
 //! arcs, a spline edge, two parts in one file, inch units and a
 //! negative-extrusion (mirrored OCS) arc.
 //!
-//! Usage: cargo run -p turbonest-core --example make_samples -- <out_dir>
+//! Usage: cargo run -p plyroll-core --example make_samples -- <out_dir>
 
 use dxf::entities::{Arc, Circle, Entity, EntityType, Line, LwPolyline, Spline};
 use dxf::enums::{AcadVersion, Units};

@@ -1,16 +1,16 @@
 [package]
-name = "turbonest-cli"
+name = "plyroll-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "turbonest"
+name = "plyroll"
 path = "src/main.rs"
 
 [dependencies]
-turbonest-core = { path = "../turbonest-core" }
-turbonest-nest = { path = "../turbonest-nest" }
+plyroll-core = { path = "../plyroll-core" }
+plyroll-nest = { path = "../plyroll-nest" }
 anyhow.workspace = true
 log.workspace = true
 clap.workspace = true

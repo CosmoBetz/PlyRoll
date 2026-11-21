@@ -4,13 +4,13 @@ use std::f64::consts::PI;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
-use turbonest_core::export::write_dxf;
-use turbonest_core::geom::{Path, Pt, Vtx, bulge_from_sweep};
-use turbonest_core::import::{ImportOptions, LayerRules, import_dxf};
-use turbonest_core::model::{Material, MaterialKind, PlyShape, RefOrigin, Shape, Variant};
-use turbonest_core::orient::fibre_ok;
-use turbonest_core::verify::verify;
-use turbonest_nest::{NestOptions, build_groups, nest};
+use plyroll_core::export::write_dxf;
+use plyroll_core::geom::{Path, Pt, Vtx, bulge_from_sweep};
+use plyroll_core::import::{ImportOptions, LayerRules, import_dxf};
+use plyroll_core::model::{Material, MaterialKind, PlyShape, RefOrigin, Shape, Variant};
+use plyroll_core::orient::fibre_ok;
+use plyroll_core::verify::verify;
+use plyroll_nest::{NestOptions, build_groups, nest};
 
 fn shape(name: &str, outer: Path, holes: Vec<Path>) -> Shape {
     Shape { name: name.into(), source_file: format!("{name}.dxf").into(), outer, holes, marks: vec![], layer_ref_deg: None, mirrored_on_import: false }
@@ -87,7 +87,7 @@ fn nest_verify_and_dxf_roundtrip() {
     }
 
     // Write the cut file and read its CUT layer back.
-    let dir = std::env::temp_dir().join(format!("turbonest-test-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("plyroll-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let dxf = dir.join("layout.dxf");
     write_dxf(&dxf, &plies, &layout).unwrap();
@@ -109,11 +109,11 @@ fn twill_swap_merges_plus_minus_45() {
     let strict = build_groups(&plies, &material(MaterialKind::Twill, false)).unwrap();
     let swap = build_groups(&plies, &material(MaterialKind::Twill, true)).unwrap();
     // rib: 0 / +45 / -45 are three items strictly; with swap, +45 and -45 merge.
-    let ribs = |g: &[turbonest_nest::ItemGroup]| g.iter().filter(|g| g.shape_idx == 0).count();
+    let ribs = |g: &[plyroll_nest::ItemGroup]| g.iter().filter(|g| g.shape_idx == 0).count();
     assert_eq!(ribs(&strict), 3);
     assert_eq!(ribs(&swap), 2);
     // plate 0 and 90 merge with swap too.
-    let plates = |g: &[turbonest_nest::ItemGroup]| g.iter().filter(|g| g.shape_idx == 1).count();
+    let plates = |g: &[plyroll_nest::ItemGroup]| g.iter().filter(|g| g.shape_idx == 1).count();
     assert_eq!(plates(&strict), 2);
     assert_eq!(plates(&swap), 1);
 }

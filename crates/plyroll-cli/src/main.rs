@@ -1,4 +1,4 @@
-//! `turbonest` command-line tool.
+//! `plyroll` command-line tool.
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -6,16 +6,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use turbonest_core::export;
-use turbonest_core::geom::{BBox, FlattenMode};
-use turbonest_core::import::{ImportOptions, UnitsOverride, import_dxf};
-use turbonest_core::job::{load_job, load_materials, read_job_csv};
-use turbonest_core::model::{Material, PlyShape};
-use turbonest_core::verify::verify;
-use turbonest_nest::{NestOptions, nest};
+use plyroll_core::export;
+use plyroll_core::geom::{BBox, FlattenMode};
+use plyroll_core::import::{ImportOptions, UnitsOverride, import_dxf};
+use plyroll_core::job::{load_job, load_materials, read_job_csv};
+use plyroll_core::model::{Material, PlyShape};
+use plyroll_core::verify::verify;
+use plyroll_nest::{NestOptions, nest};
 
 #[derive(Parser)]
-#[command(name = "turbonest", version, about = "Nest prepreg plies on a roll, keeping every ply's fibre direction.")]
+#[command(name = "plyroll", version, about = "Nest prepreg plies on a roll, keeping every ply's fibre direction.")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -148,8 +148,8 @@ fn run() -> Result<i32> {
                 ..NestOptions::default()
             };
             if dump_instance {
-                let groups = turbonest_nest::build_groups(&plies, &material)?;
-                let inst = turbonest_nest::build_instance(&plies, &material, &groups, opts.nest_tol);
+                let groups = plyroll_nest::build_groups(&plies, &material)?;
+                let inst = plyroll_nest::build_instance(&plies, &material, &groups, opts.nest_tol);
                 let p = job.out.join("solver_instance.json");
                 std::fs::write(&p, serde_json::to_string_pretty(&inst)?)?;
                 println!("wrote {}", p.display());
@@ -231,7 +231,7 @@ fn print_ply_table(plies: &[PlyShape]) {
     }
 }
 
-fn finish(out: &Path, plies: &[PlyShape], layout: &turbonest_core::model::Layout, warnings: &[String], seed: u64, solve_secs: f64) -> Result<i32> {
+fn finish(out: &Path, plies: &[PlyShape], layout: &plyroll_core::model::Layout, warnings: &[String], seed: u64, solve_secs: f64) -> Result<i32> {
     let m = &layout.material;
     let report = verify(plies, layout);
     let parts_area: f64 = layout.placements.iter().map(|pl| plies[pl.shape_idx].shape.area(0.01)).sum();

@@ -947,6 +947,47 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c938015719552d665fd0553b90d96cd7ff58e83e4c061ca99e6bb78865a72752"
 
 [[package]]
+name = "plyroll-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ctrlc",
+ "env_logger",
+ "log",
+ "plyroll-core",
+ "plyroll-nest",
+ "serde_json",
+]
+
+[[package]]
+name = "plyroll-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "csv",
+ "dxf",
+ "geo",
+ "log",
+ "polylabel",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "plyroll-nest"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "jagua-rs",
+ "log",
+ "plyroll-core",
+ "rand",
+ "sparrow",
+]
+
+[[package]]
 name = "polylabel"
 version = "3.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1340,9 +1381,9 @@ dependencies = [
 
 [[package]]
 name = "toml_parser"
-version = "1.1.5+spec-1.1.0"
+version = "1.1.6+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
+checksum = "e6769c452d71ba30696c6b37770c439a9cc9110f47f7d5cdbeda79840ef5ea31"
 dependencies = [
  "winnow 1.0.5",
 ]
@@ -1352,47 +1393,6 @@ name = "toml_writer"
 version = "1.2.0+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "009dbb7700f11c55ef83aebbe4c0e9cf1f1ac0844bd8d6f00dc38f302026e13a"
-
-[[package]]
-name = "turbonest-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "ctrlc",
- "env_logger",
- "log",
- "serde_json",
- "turbonest-core",
- "turbonest-nest",
-]
-
-[[package]]
-name = "turbonest-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "csv",
- "dxf",
- "geo",
- "log",
- "polylabel",
- "serde",
- "serde_json",
- "toml",
-]
-
-[[package]]
-name = "turbonest-nest"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "jagua-rs",
- "log",
- "rand",
- "sparrow",
- "turbonest-core",
-]
 
 [[package]]
 name = "unicode-ident"
