@@ -86,10 +86,28 @@ export interface Material {
   cost_per_m2: number | null;
 }
 
+/** "global": all plies mixed; "by-kit": one section of roll per kit, one after another. */
+export type Grouping = "global" | "by-kit";
+
 export interface JobSettings {
   material: Material | null;
   time_s: number;
   sets: number;
+  grouping: Grouping;
+}
+
+/** One kit's stretch of roll in a kit-by-kit nest, roll x in mm. */
+export interface LayoutSection {
+  kit: string | null;
+  start: number;
+  end: number;
+}
+
+export interface SectionProgress {
+  /** 0-based */
+  index: number;
+  count: number;
+  kit: string | null;
 }
 
 export interface LibraryView {
@@ -156,6 +174,8 @@ export interface ResultView {
   used_length: number;
   shapes: LayoutShapes;
   placements: Placement[];
+  /** Kit sections along the roll (kit-by-kit nests only). */
+  sections: LayoutSection[];
 }
 
 export interface NestStarted {
@@ -171,6 +191,8 @@ export interface NestProgress {
   density: number;
   elapsed: number;
   placements: Placement[] | null;
+  sections: LayoutSection[] | null;
+  section: SectionProgress | null;
 }
 
 export interface NestDone {
@@ -231,4 +253,6 @@ export interface LiveNest {
   elapsed: number;
   phase: string;
   stopping: boolean;
+  sections: LayoutSection[];
+  section: SectionProgress | null;
 }

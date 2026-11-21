@@ -56,7 +56,7 @@ fn sets_multiply_quantities_and_material_is_required() {
     assert!(err.contains("material"), "{err}");
 
     let one: u32 = p.nest_input(Some(&ud())).unwrap().plies.iter().flat_map(|s| s.variants.iter().map(|v| v.qty)).sum();
-    p.set_job(JobSettings { material: Some(ud()), time_s: 30, sets: 3 }).unwrap();
+    p.set_job(JobSettings { material: Some(ud()), time_s: 30, sets: 3, ..Default::default() }).unwrap();
     let input = p.nest_input(None).unwrap();
     let three: u32 = input.plies.iter().flat_map(|s| s.variants.iter().map(|v| v.qty)).sum();
     assert_eq!(three, 3 * one);
@@ -72,9 +72,9 @@ fn sets_multiply_quantities_and_material_is_required() {
 #[test]
 fn result_goes_stale_on_edits_and_survives_save() {
     let mut p = project();
-    p.set_job(JobSettings { material: Some(ud()), time_s: 30, sets: 1 }).unwrap();
+    p.set_job(JobSettings { material: Some(ud()), time_s: 30, sets: 1, ..Default::default() }).unwrap();
     let input = p.nest_input(None).unwrap();
-    let layout = Layout { material: input.material.clone(), placements: vec![], used_length: 100.0 };
+    let layout = Layout { material: input.material.clone(), placements: vec![], used_length: 100.0, sections: vec![] };
     p.result = Some(NestResult::new(input, layout, RunInfo { seed: 1, solve_seconds: 2.0, stopped: false }));
     assert!(p.freshness().unwrap().fresh);
 

@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use plyroll_core::geom::{Affine, BBox, FlattenMode, Pt, norm_deg};
+use plyroll_core::kits::{self, Grouping, LayoutSection, Section};
 use plyroll_core::model::{Layout, Material, Placement, PlyShape};
 use plyroll_core::orient::{allowed_rotations, rotation_key};
 use plyroll_core::verify::placed_outlines;
@@ -70,7 +71,18 @@ pub struct Progress {
     pub density: f64,
     pub elapsed: Duration,
     /// Best feasible layout so far (only with `NestOptions::live_layout`).
+    /// When nesting kit by kit: the finished kits plus the current one.
     pub layout: Option<Layout>,
+    /// When nesting kit by kit: which kit is being nested.
+    pub section: Option<SectionProgress>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SectionProgress {
+    /// 0-based.
+    pub index: usize,
+    pub count: usize,
+    pub kit: Option<String>,
 }
 
 /// One solver item: a shape at one set of allowed rotations, possibly
@@ -161,7 +173,7 @@ impl<F: FnMut(&Progress)> SolutionListener for Listener<'_, F> {
             }
             _ => None,
         };
-        (self.cb)(&Progress { phase, length, density: solution.density() as f64, elapsed: self.start.elapsed(), layout });
+        (self.cb)(&Progress { phase, length, density: solution.density() as f64, elapsed: self.start.elapsed(), layout, section: None });
     }
 }
 
@@ -243,6 +255,70 @@ pub fn nest(plies: &[PlyShape], material: &Material, opts: &NestOptions, mut on_
     map_solution(plies, material, &groups, &solution)
 }
 
+/// Nests a job the way its grouping asks: all plies mixed, or kit by kit with
+/// each kit on its own section of roll (see `plyroll_core::kits`).
+///
+/// Kit by kit, the time is shared by ply area (at least 1 s per kit) and the
+/// kits are nested one after another. On stop, the current kit keeps its best
+/// layout and the remaining kits get a quick first layout, so the result is
+/// always complete.
+pub fn nest_job(
+    plies: &[PlyShape],
+    material: &Material,
+    grouping: Grouping,
+    opts: &NestOptions,
+    mut on_progress: impl FnMut(&Progress),
+    cancel: Arc<AtomicBool>,
+) -> Result<Layout> {
+    let sections = match grouping {
+        Grouping::Global => return nest(plies, material, opts, on_progress, cancel),
+        Grouping::ByKit => kits::sections(plies),
+    };
+    if sections.len() <= 1 {
+        let mut layout = nest(plies, material, opts, on_progress, cancel)?;
+        if let Some(sec) = sections.first() {
+            layout.sections = vec![LayoutSection { kit: sec.kit.clone(), start: material.lead_trim, end: layout.used_length }];
+        }
+        return Ok(layout);
+    }
+    plyroll_core::job::validate_material(material)?;
+    // Fail before any solving if a ply does not fit.
+    for sec in &sections {
+        build_groups(&sec.plies, material)?;
+    }
+    let total_area: f64 = sections.iter().map(Section::area).sum::<f64>().max(1e-9);
+    let start_time = std::time::Instant::now();
+    let seed = opts.seed.unwrap_or_else(rand::random);
+    let count = sections.len();
+    let mut done: Vec<Layout> = Vec::new();
+    let mut start = material.lead_trim;
+    for (k, sec) in sections.iter().enumerate() {
+        let mat = kits::section_material(material, start);
+        let share = opts.time.mul_f64(sec.area() / total_area).max(Duration::from_secs(1));
+        let sec_opts = NestOptions { time: share, seed: Some(seed.wrapping_add(k as u64)), ..opts.clone() };
+        let info = SectionProgress { index: k, count, kit: sec.kit.clone() };
+        let finished: Vec<(&Section, &Layout)> = sections.iter().zip(done.iter()).collect();
+        let layout = nest(
+            &sec.plies,
+            &mat,
+            &sec_opts,
+            |p| {
+                let layout = p.layout.as_ref().and_then(|cur| {
+                    let mut parts = finished.clone();
+                    parts.push((sec, cur));
+                    kits::merge(material, &parts).ok()
+                });
+                on_progress(&Progress { elapsed: start_time.elapsed(), layout, section: Some(info.clone()), ..p.clone() });
+            },
+            cancel.clone(),
+        )?;
+        start = kits::next_start(material, layout.used_length.max(start));
+        done.push(layout);
+    }
+    let parts: Vec<(&Section, &Layout)> = sections.iter().zip(done.iter()).collect();
+    kits::merge(material, &parts)
+}
+
 /// Maps a solver solution back to ply placements in roll coordinates.
 fn map_solution(plies: &[PlyShape], material: &Material, groups: &[ItemGroup], solution: &SPSolution) -> Result<Layout> {
     let out = jagua_rs::probs::spp::io::export(solution, *sparrow::EPOCH);
@@ -280,7 +356,7 @@ fn map_solution(plies: &[PlyShape], material: &Material, groups: &[ItemGroup], s
             }
         }
     }
-    let mut layout = Layout { material: material.clone(), placements, used_length: 0.0 };
+    let mut layout = Layout { material: material.clone(), placements, used_length: 0.0, sections: vec![] };
     let max_x = placed_outlines(plies, &layout, FlattenMode::Enclosing).iter().map(|o| o.bbox.max.x).fold(material.lead_trim, f64::max);
     layout.used_length = max_x;
     Ok(layout)

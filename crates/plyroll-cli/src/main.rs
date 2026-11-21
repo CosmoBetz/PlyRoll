@@ -13,7 +13,8 @@ use plyroll_core::job::{load_job, load_materials, read_job_csv};
 use plyroll_core::model::{Material, PlyShape};
 use plyroll_core::project::{self, Project};
 use plyroll_core::report::{ReportMeta, RunInfo, summarize, write_outputs};
-use plyroll_nest::{NestOptions, nest};
+use plyroll_core::kits::{self, Grouping};
+use plyroll_nest::{NestOptions, nest_job};
 
 #[derive(Parser)]
 #[command(name = "plyroll", version, about = "Nest prepreg plies on a roll, keeping every ply's fibre direction.")]
@@ -29,6 +30,21 @@ enum UnitsArg {
     Cm,
     M,
     Inch,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum GroupingArg {
+    Global,
+    ByKit,
+}
+
+impl From<GroupingArg> for Grouping {
+    fn from(g: GroupingArg) -> Self {
+        match g {
+            GroupingArg::Global => Grouping::Global,
+            GroupingArg::ByKit => Grouping::ByKit,
+        }
+    }
 }
 
 impl From<UnitsArg> for UnitsOverride {
@@ -102,6 +118,10 @@ enum Cmd {
         /// Also write the solver instance JSON (for debugging with the sparrow CLI).
         #[arg(long)]
         dump_instance: bool,
+        /// global: all plies mixed (shortest roll). by-kit: each kit on its own
+        /// section of roll, one after another. Default: the project's setting, else global.
+        #[arg(long, value_enum)]
+        grouping: Option<GroupingArg>,
     },
     /// Import a job and write orientation.svg (0° axes and fibre directions) without nesting.
     Check {
@@ -163,9 +183,11 @@ fn run() -> Result<i32> {
             println!("\nwrote {}", job.out.join("orientation.svg").display());
             Ok(0)
         }
-        Cmd::Nest { job, time, seed, workers, early_stop, dump_instance } => {
+        Cmd::Nest { job, time, seed, workers, early_stop, dump_instance, grouping } => {
             let (plies, material, warnings) = prepare(&job)?;
-            let time = time.or_else(|| is_project(&job.job).then(|| Project::load(&job.job).map(|p| p.job.time_s).ok()).flatten()).unwrap_or(60);
+            let saved = is_project(&job.job).then(|| Project::load(&job.job).ok().map(|p| p.job)).flatten();
+            let time = time.or(saved.as_ref().map(|j| j.time_s)).unwrap_or(60);
+            let grouping = grouping.map(Grouping::from).or(saved.as_ref().map(|j| j.grouping)).unwrap_or_default();
             print_ply_table(&plies);
             let seed = seed.unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_secs()));
             let opts = NestOptions {
@@ -184,6 +206,10 @@ fn run() -> Result<i32> {
             }
             let total: u32 = plies.iter().flat_map(|p| p.variants.iter().map(|v| v.qty)).sum();
             println!("\nnesting {total} plies on {} for up to {time} s ({} threads, seed {seed}); Ctrl-C stops and keeps the best layout", material.name, opts.workers);
+            if grouping == Grouping::ByKit {
+                let kits: Vec<String> = kits::kit_order(&plies).into_iter().map(|k| k.unwrap_or_else(|| "(no kit)".into())).collect();
+                println!("kit by kit, in this order along the roll: {}", kits.join(", "));
+            }
             let cancel = Arc::new(AtomicBool::new(false));
             let stopped = cancel.clone();
             {
@@ -198,11 +224,21 @@ fn run() -> Result<i32> {
             let start = Instant::now();
             let mut best = f64::INFINITY;
             let mut printed = (f64::INFINITY, Duration::ZERO);
-            let layout = nest(
+            let mut section = usize::MAX;
+            let layout = nest_job(
                 &plies,
                 &material,
+                grouping,
                 &opts,
                 |p| {
+                    if let Some(s) = &p.section
+                        && s.index != section
+                    {
+                        section = s.index;
+                        best = f64::INFINITY;
+                        printed = (f64::INFINITY, Duration::ZERO);
+                        println!("  kit {} ({} of {})", s.kit.as_deref().unwrap_or("(no kit)"), s.index + 1, s.count);
+                    }
                     best = best.min(p.length);
                     // Print at most every 2 s, or on a >0.5% improvement.
                     if best < printed.0 * 0.995 || (best < printed.0 && p.elapsed >= printed.1 + Duration::from_secs(2)) {
@@ -311,6 +347,9 @@ fn finish(out: &Path, job: &Path, plies: &[PlyShape], layout: &plyroll_core::mod
         return Ok(2);
     }
     println!("verification  passed");
+    for s in &layout.sections {
+        println!("  kit {:<12} {:>9.1} .. {:>9.1} mm", s.kit.as_deref().unwrap_or("(no kit)"), s.start, s.end);
+    }
     let names: Vec<String> = written.iter().filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).chain(["orientation.svg".into()]).collect();
     println!("\nwrote {}/{{{}}}", out.display(), names.join(", "));
     Ok(0)

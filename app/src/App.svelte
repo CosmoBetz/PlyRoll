@@ -256,7 +256,7 @@
     if (!backend || live) return;
     try {
       const s = await backend.startNest();
-      live = { run: s.run, time_s: s.time_s, shapes: s.shapes, placements: null, length: null, density: null, elapsed: 0, phase: "start", stopping: false };
+      live = { run: s.run, time_s: s.time_s, shapes: s.shapes, placements: null, length: null, density: null, elapsed: 0, phase: "start", stopping: false, sections: [], section: null };
       const early = earlyDone.get(s.run);
       if (early) nestDone(early);
     } catch (e) {
@@ -407,7 +407,9 @@
           live.density = p.density;
           live.elapsed = p.elapsed;
           live.phase = p.phase;
+          live.section = p.section;
           if (p.placements) live.placements = p.placements;
+          if (p.sections) live.sections = p.sections;
         },
         done: nestDone,
       });

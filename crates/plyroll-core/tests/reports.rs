@@ -46,7 +46,7 @@ fn demo_layout() -> (Vec<PlyShape>, Layout) {
         pl.ty = material.edge_trim + 1.0 - b.min.y;
     }
     let used_length = 1000.0 * (n + 2) as f64;
-    (plies, Layout { material, placements, used_length })
+    (plies, Layout { material, placements, used_length, sections: vec![] })
 }
 
 #[test]

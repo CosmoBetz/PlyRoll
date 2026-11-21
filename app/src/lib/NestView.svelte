@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AppView, JobSettings, LibraryView, LiveNest as Live, Material } from "./types";
+  import type { AppView, Grouping, JobSettings, LibraryView, LiveNest as Live, Material } from "./types";
   import RollView from "./RollView.svelte";
 
   let {
@@ -47,6 +47,16 @@
   function setTime(s: number) {
     if (Number.isFinite(s) && s >= 1 && s <= 3600 && s !== job.time_s) onjob({ ...job, time_s: Math.round(s) });
   }
+  function setGrouping(g: Grouping) {
+    if (g !== job.grouping) onjob({ ...job, grouping: g });
+  }
+  // Kits with plies to cut, in project order (no kit last), as nested kit by kit.
+  const kits = $derived.by(() => {
+    const seen: (string | null)[] = [];
+    for (const v of view.plies.flatMap((p) => p.variants)) if (v.qty > 0 && !seen.includes(v.kit ?? null)) seen.push(v.kit ?? null);
+    return [...seen.filter((k) => k != null), ...seen.filter((k) => k == null)];
+  });
+  const kitName = (k: string | null) => k ?? "no kit";
   function setSets(n: number) {
     if (Number.isInteger(n) && n >= 1 && n <= 1000 && n !== job.sets) onjob({ ...job, sets: n });
   }
@@ -55,8 +65,8 @@
 
   // What the canvas shows: the running nest, else the stored result.
   const canvas = $derived.by(() => {
-    if (live) return { shapes: live.shapes, placements: live.placements ?? [], used: live.placements ? live.length : null, live: true };
-    if (result) return { shapes: result.shapes, placements: result.placements, used: result.used_length, live: false };
+    if (live) return { shapes: live.shapes, placements: live.placements ?? [], used: live.placements ? live.length : null, live: true, sections: live.sections };
+    if (result) return { shapes: result.shapes, placements: result.placements, used: result.used_length, live: false, sections: result.sections ?? [] };
     return null;
   });
   const exportBlock = $derived(
@@ -121,6 +131,27 @@
       <p class="hint">Every ply quantity is multiplied by this.</p>
     </section>
 
+    <section>
+      <h4>Layout</h4>
+      <div class="seg">
+        <button class:on={job.grouping === "global"} disabled={running} onclick={() => setGrouping("global")} title="All plies mixed: the shortest roll">Mixed</button>
+        <button class:on={job.grouping === "by-kit"} disabled={running} onclick={() => setGrouping("by-kit")} title="Each kit on its own stretch of roll, cut together"
+          >Kit by kit</button
+        >
+      </div>
+      <p class="hint">
+        {#if job.grouping === "by-kit"}
+          {#if kits.length > 1}
+            Each kit gets its own stretch of roll, in this order: {kits.map(kitName).join(", ")}. Usually a little more material than mixed.
+          {:else}
+            Only one kit ({kitName(kits[0] ?? null)}), so this is the same as mixed. Set kits in the ply angle table.
+          {/if}
+        {:else}
+          All plies mixed for the shortest roll. Kit by kit keeps each kit's plies together.
+        {/if}
+      </p>
+    </section>
+
     <section class="go">
       {#if !view.nest_ready.ok}
         <p class="blocked">{view.nest_ready.message}</p>
@@ -137,14 +168,17 @@
         <div class="progress" title="{live.phase}">
           <div class="fill" style="width:{Math.min(100, (100 * live.elapsed) / live.time_s)}%"></div>
         </div>
-        <p class="hint">{live.phase === "compress" ? "Compressing" : "Exploring"} · {fmtTime(live.elapsed)} of {fmtTime(live.time_s)}</p>
+        <p class="hint">
+          {#if live.section}Kit {kitName(live.section.kit)} ({live.section.index + 1} of {live.section.count}) ·
+          {/if}{live.phase === "compress" ? "Compressing" : "Exploring"} · {fmtTime(live.elapsed)} of {fmtTime(live.time_s)}
+        </p>
       {/if}
     </section>
   </aside>
 
   <section class="stage">
     {#if canvas}
-      <RollView bind:this={roll} shapes={canvas.shapes} placements={canvas.placements} usedLength={canvas.used} live={canvas.live} />
+      <RollView bind:this={roll} shapes={canvas.shapes} placements={canvas.placements} usedLength={canvas.used} live={canvas.live} sections={canvas.sections} />
       <button class="fit" onclick={() => roll?.fit()} title="Fit (double-click)">Fit</button>
       {#if live && !live.placements}<div class="banner">Building a first layout…</div>{/if}
     {:else}

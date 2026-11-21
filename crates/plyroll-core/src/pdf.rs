@@ -27,6 +27,7 @@ const MONO: Name = Name(b"F3");
 
 const INK: (f32, f32, f32) = (0.1, 0.1, 0.1);
 const MUTED: (f32, f32, f32) = (0.42, 0.42, 0.42);
+const KIT: (f32, f32, f32) = (0.18, 0.40, 0.80);
 const RULE: (f32, f32, f32) = (0.82, 0.82, 0.82);
 
 /// Builds the whole report.
@@ -35,7 +36,7 @@ pub fn nest_report(plies: &[PlyShape], layout: &Layout, summary: &Summary, run: 
     let mut doc = Doc::default();
     let mut y = header(&mut doc, plies, layout, summary, run, warnings, meta, &groups);
     layout_strips(&mut doc, &mut y, plies, layout, meta);
-    checklist_pages(&mut doc, &groups, meta);
+    checklist_pages(&mut doc, &groups, &layout.sections, meta);
     doc.finish(meta, &layout.material.name, run.seed)
 }
 
@@ -333,6 +334,30 @@ fn layout_strips(doc: &mut Doc, y: &mut f32, plies: &[PlyShape], layout: &Layout
             c.line_to(MARGIN, oy + h);
         }
         c.stroke();
+        // Kit by kit: a divider between kits and each kit's name at its start.
+        c.set_stroke_rgb(KIT.0, KIT.1, KIT.2);
+        c.set_line_width(0.9);
+        c.set_dash_pattern([2.0, 2.0], 0.0);
+        for w2 in layout.sections.windows(2) {
+            let bx = ((w2[0].end + w2[1].start) / 2.0) as f32;
+            if bx > x0 && bx < x1 {
+                c.move_to(px(bx as f64), oy - 3.0);
+                c.line_to(px(bx as f64), oy + h + 3.0);
+            }
+        }
+        c.stroke();
+        c.set_dash_pattern(std::iter::empty::<f32>(), 0.0);
+        for sec in &layout.sections {
+            let sx = sec.start as f32;
+            if sx >= x0 && sx < x1 {
+                let name = sec.kit.as_deref().map_or_else(|| "no kit".to_string(), |k| format!("Kit {k}"));
+                let room = (x1.min(sec.end as f32) - sx) * s - 4.0;
+                let t = fit(&name, room.max(12.0), 7.0);
+                let tw = est_width(&t, 7.0);
+                fill_rect(c, px(sec.start) + 1.0, oy + h - 10.0, tw + 4.0, 9.0, (1.0, 1.0, 1.0));
+                text(c, BOLD, 7.0, px(sec.start) + 3.0, oy + h - 7.5, KIT, &t);
+            }
+        }
         if k + 1 == strips {
             c.set_stroke_rgb(0.75, 0.15, 0.15);
             c.set_line_width(1.0);
@@ -398,7 +423,7 @@ const COL_CUTS: f32 = MARGIN + 290.0;
 const ENTRY_SIZE: f32 = 8.0;
 const LINE: f32 = 12.0;
 
-fn checklist_pages(doc: &mut Doc, groups: &[KitGroup], meta: &ReportMeta) {
+fn checklist_pages(doc: &mut Doc, groups: &[KitGroup], sections: &[crate::kits::LayoutSection], meta: &ReportMeta) {
     let all: Vec<usize> = groups.iter().flat_map(|g| g.rows.iter().flat_map(|r| r.cuts.iter().map(|c| c.cut_no))).collect();
     let no_w = all.iter().max().map_or(1, |n| n.to_string().len());
     let max_pos = groups.iter().flat_map(|g| g.rows.iter().flat_map(|r| r.cuts.iter().map(|c| c.x_mm))).fold(0.0f64, f64::max);
@@ -418,7 +443,10 @@ fn checklist_pages(doc: &mut Doc, groups: &[KitGroup], meta: &ReportMeta) {
         let heading = |doc: &mut Doc, y: &mut f32, cont: bool| {
             let c = doc.page();
             fill_rect(c, MARGIN, *y - 5.0, BODY_W, 17.0, (0.93, 0.93, 0.93));
-            let t = format!("{title}{}  ·  {} plies", if cont { " (continued)" } else { "" }, g.plies());
+            let mut t = format!("{title}{}  ·  {} plies", if cont { " (continued)" } else { "" }, g.plies());
+            if let Some(sec) = sections.iter().find(|s| s.kit == g.kit) {
+                t.push_str(&format!("  ·  roll {:.2}–{:.2} m", sec.start / 1000.0, sec.end / 1000.0));
+            }
             text(c, BOLD, 10.5, MARGIN + 4.0, *y, INK, &fit(&t, BODY_W - 8.0, 10.5));
             *y -= 19.0;
         };

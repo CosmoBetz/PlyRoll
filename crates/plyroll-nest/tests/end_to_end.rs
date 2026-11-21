@@ -10,7 +10,9 @@ use plyroll_core::import::{ImportOptions, LayerRules, import_dxf};
 use plyroll_core::model::{Material, MaterialKind, PlyShape, RefOrigin, Shape, Variant};
 use plyroll_core::orient::fibre_ok;
 use plyroll_core::verify::verify;
-use plyroll_nest::{NestOptions, build_groups, nest};
+use plyroll_core::kits::Grouping;
+use plyroll_core::report::cut_plies;
+use plyroll_nest::{NestOptions, build_groups, nest, nest_job};
 
 fn shape(name: &str, outer: Path, holes: Vec<Path>) -> Shape {
     Shape { name: name.into(), source_file: format!("{name}.dxf").into(), outer, holes, marks: vec![], layer_ref_deg: None, mirrored_on_import: false }
@@ -157,4 +159,90 @@ fn stop_right_away_still_gives_a_complete_layout() {
     let r = verify(&plies, &layout);
     assert!(r.ok, "{:?}", r.issues);
     assert_eq!(layout.placements.len(), 14);
+}
+
+/// The test plies with kits: one shape split over two kits, and some plies without a kit.
+fn kitted() -> Vec<PlyShape> {
+    let mut p = plies();
+    let k = |s: &str| Some(s.to_string());
+    p[0].variants[0].kit = k("B"); // rib 0°
+    p[0].variants[1].kit = k("A"); // rib +45°
+    p[0].variants[2].kit = k("A"); // rib -45°
+    p[1].variants[0].kit = k("B"); // plate 0°
+    // plate 90° and tri: no kit
+    p
+}
+
+#[test]
+fn kit_by_kit_cuts_each_kit_together() {
+    let plies = kitted();
+    let mat = material(MaterialKind::Ud, false);
+    let mut live = Vec::new();
+    let o = NestOptions { live_layout: Some(Duration::ZERO), ..opts() };
+    let layout = nest_job(&plies, &mat, Grouping::ByKit, &o, |p| live.extend(p.layout.clone()), Arc::new(AtomicBool::new(false))).expect("nest");
+    let r = verify(&plies, &layout);
+    assert!(r.ok, "{:?}", r.issues);
+    assert_eq!(layout.placements.len(), 14);
+
+    // Sections in first-seen kit order, no kit last, end to end along the roll.
+    let kits: Vec<Option<&str>> = layout.sections.iter().map(|s| s.kit.as_deref()).collect();
+    assert_eq!(kits, [Some("B"), Some("A"), None]);
+    assert_eq!(layout.sections[0].start, mat.lead_trim);
+    for w in layout.sections.windows(2) {
+        assert!((w[1].start - (w[0].end + mat.spacing)).abs() < 1e-9, "{w:?}");
+    }
+    assert_eq!(layout.used_length, layout.sections[2].end);
+
+    // Each kit's cut numbers form one unbroken run, in section order.
+    let cuts = cut_plies(&plies, &layout);
+    let mut runs: Vec<Option<String>> = Vec::new();
+    for c in &cuts {
+        if runs.last() != Some(&c.kit) {
+            runs.push(c.kit.clone());
+        }
+    }
+    assert_eq!(runs, [Some("B".to_string()), Some("A".to_string()), None], "kits interleave in cut order");
+    // Every ply sits inside its kit's section.
+    for c in &cuts {
+        let s = layout.sections.iter().find(|s| s.kit == c.kit).unwrap();
+        assert!(c.x_mm >= s.start - 1e-6 && c.x_mm <= s.end, "{} at {} outside {s:?}", c.label, c.x_mm);
+    }
+
+    // Live layouts grow kit by kit and are always valid placements of the full list.
+    assert!(!live.is_empty());
+    for l in &live {
+        assert!(l.placements.iter().all(|p| p.shape_idx < plies.len() && p.variant_idx < plies[p.shape_idx].variants.len()));
+    }
+}
+
+#[test]
+fn kit_by_kit_without_kits_is_one_section() {
+    let plies = plies();
+    let mat = material(MaterialKind::Ud, false);
+    let layout = nest_job(&plies, &mat, Grouping::ByKit, &opts(), |_| {}, Arc::new(AtomicBool::new(false))).expect("nest");
+    assert!(verify(&plies, &layout).ok);
+    assert_eq!(layout.placements.len(), 14);
+    assert_eq!(layout.sections.len(), 1);
+    assert_eq!(layout.sections[0].kit, None);
+}
+
+#[test]
+fn stopping_kit_by_kit_still_gives_every_kit() {
+    let plies = kitted();
+    let mat = material(MaterialKind::Ud, false);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let c = cancel.clone();
+    let stopper = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        c.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+    let t = std::time::Instant::now();
+    let o = NestOptions { time: Duration::from_secs(60), early_stop: false, ..opts() };
+    let layout = nest_job(&plies, &mat, Grouping::ByKit, &o, |_| {}, cancel).expect("nest");
+    stopper.join().unwrap();
+    assert!(t.elapsed() < Duration::from_secs(15), "stop took {:?}", t.elapsed());
+    let r = verify(&plies, &layout);
+    assert!(r.ok, "{:?}", r.issues);
+    assert_eq!(layout.placements.len(), 14);
+    assert_eq!(layout.sections.len(), 3);
 }

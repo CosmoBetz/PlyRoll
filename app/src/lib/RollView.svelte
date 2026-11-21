@@ -3,7 +3,7 @@
   // the roll, y across it, y up (one flip, as in the editor), so the drawing
   // face matches the cut file. Plies are coloured by ply angle and hatched
   // along their fibre direction on the roll.
-  import type { LayoutShapes, Placement, XY } from "./types";
+  import type { LayoutSection, LayoutShapes, Placement, XY } from "./types";
   import { angleColor, fmtAngle, pathD } from "./geo";
 
   let {
@@ -11,12 +11,15 @@
     placements,
     usedLength,
     live = false,
+    sections = [],
   }: {
     shapes: LayoutShapes;
     placements: Placement[];
     usedLength: number | null;
     /** Still optimising: drawn lighter, no hover. */
     live?: boolean;
+    /** Kit sections (kit by kit): a divider between kits and their names. */
+    sections?: LayoutSection[];
   } = $props();
 
   let host = $state<HTMLDivElement>();
@@ -213,6 +216,13 @@
     {#each labels as l (l.q)}
       <text x={l.x} y={l.y} class="label">{l.q.pl.label}</text>
     {/each}
+    {#each sections as s, i (i)}
+      {@const x = toScreen([s.start, 0])[0]}
+      {#if i > 0}
+        <line x1={x - (s.start - sections[i - 1].end) / 2 / mmPerPx} y1={toScreen([0, m.roll_width + 30 * mmPerPx])[1]} x2={x - (s.start - sections[i - 1].end) / 2 / mmPerPx} y2={toScreen([0, -12 * mmPerPx])[1]} class="kit-line" />
+      {/if}
+      <text x={x + 4} y={toScreen([0, m.roll_width])[1] - 8} class="kit-label">{s.kit ?? "no kit"}</text>
+    {/each}
     {#if usedX}
       <line x1={usedX[0]} y1={toScreen([0, m.roll_width + 30 * mmPerPx])[1]} x2={usedX[0]} y2={toScreen([0, -12 * mmPerPx])[1]} class="cut" />
       <text x={usedX[0] - 6} y={toScreen([0, m.roll_width])[1] - 8} class="cut-label">used {usedLength!.toFixed(1)} mm</text>
@@ -301,6 +311,16 @@
     stroke: var(--ink);
     stroke-width: 1.5;
     stroke-dasharray: 6 4;
+  }
+  .kit-line {
+    stroke: var(--accent);
+    stroke-width: 1.5;
+    stroke-dasharray: 2 3;
+  }
+  .kit-label {
+    font-size: 12px;
+    font-weight: 600;
+    fill: var(--accent);
   }
   .cut-label {
     text-anchor: end;

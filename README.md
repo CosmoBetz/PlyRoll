@@ -3,7 +3,7 @@
 Free, local nesting for carbon-fibre prepreg plies on an endless roll.
 Every ply keeps its fibre direction (UD) or warp direction (twill); plies are never flipped.
 
-Status: **Phase 1 command-line tool; Phase 2 desktop app with orientation editor, material library, nesting and reports.** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
+Status: **Phase 1 command-line tool; Phase 2 desktop app with orientation editor, material library, nesting and reports; Phase 3 started (kit-by-kit nesting).** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
 Nesting is done by [sparrow](https://github.com/JeroenGar/sparrow) on top of
 [jagua-rs](https://github.com/JeroenGar/jagua-rs).
 
@@ -71,13 +71,18 @@ Nesting:
    TOML format as the CLI. The project keeps its own copy of the material. If the library entry changes later, the app
    offers to use the new version.
 2. Choose a time (30 s / 2 min / 10 min or seconds) and the number of **sets** (complete layups; multiplies every quantity).
+   **Layout:** *Mixed* nests all plies together for the shortest roll. *Kit by kit* gives each kit its own stretch of
+   roll, one after another, so a kit's plies are cut together and get consecutive cut numbers. Kits come in project
+   order (the order they first appear in the ply list); plies without a kit come last. With several sets, a kit's
+   stretch holds all its sets. The time is shared between kits by ply area. It usually costs a little roll length.
 3. **Nest.** The roll view shows the best layout so far, with fibre hatching per ply (zoom in) and the used length.
    **Stop and keep best** ends early and keeps a complete, verified layout.
 4. The result is saved with the project. Changing plies, quantities, sets or material marks it *out of date*.
    Export is then disabled until you nest again. Undo brings it back.
 5. **Export cut files…** writes the same files as the CLI (see [Output](#output)) to a folder you pick.
 
-Or nest the saved project from the command line. It uses the project's material, time and sets:
+Or nest the saved project from the command line. It uses the project's material, time, sets and layout
+(`--grouping global|by-kit` overrides the layout, and works for job CSVs too):
 
 ```bash
 ./target/release/plyroll nest my-job.plyroll -o out/my-job
@@ -159,6 +164,9 @@ Roll coordinates: x along the roll from its start, y across it from one edge.
 Every layout is re-checked with the exact geometry before any cut file is written:
 quantities, fibre direction, no part outside the trims, spacing between parts.
 If a check fails, only `layout.svg` and `report.json` are written and the exit code is 2.
+
+Kit by kit, the report's layout shows a divider and the kit name where each kit starts, the checklist headings give
+each kit's stretch of roll, and `report.json` lists the sections.
 
 The cut number is the same everywhere: the `order` column of `plies.csv`, `cut_no` in `labels.csv`, and the numbers on
 the report's layout and checklist. The checklist groups plies by kit, in the project's order (shape, then angle); there

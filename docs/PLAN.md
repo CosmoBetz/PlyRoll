@@ -1,6 +1,15 @@
 # PlyRoll — plan for a free, local 2D nesting tool for prepreg plies
 
-Status: revised 2026-11-21. **Phase 1 (CLI) is built. Phase 2 has the orientation editor, material library, job settings, live nesting, saved results, cut-file export, reports and import settings.** See the README for usage.
+Status: revised 2026-11-21. **Phase 1 (CLI) is built. Phase 2 has the orientation editor, material library, job settings, live nesting, saved results, cut-file export, reports and import settings. Phase 3 has kit-by-kit nesting.** See the README for usage.
+
+**Phase 3, kit-by-kit nesting (§5.4 kit-aware modes):**
+- **Setting:** `JobSettings.grouping` (`global` / `by-kit`), saved with the project (old files load as global), in the app's Nest view and as `plyroll nest --grouping`.
+- **How:** `plyroll-core::kits` splits the job at variant level (a kit belongs to an angle variant), in the order kits first appear (shape, then variant; the checklist's order), with "no kit" last and all sets of a kit together. `plyroll-nest::nest_job` nests the sections one after another, each with the lead trim moved to where it starts (previous end + spacing), so the solver output is already in roll coordinates; `kits::merge` maps placements back to the full ply list. Time is shared by ply area, at least 1 s per kit.
+- **Stop:** the current kit keeps its best layout and the remaining kits get the solver's first layout, so the result is always complete and verified.
+- **Output:** `Layout.sections` (start/end per kit) is saved with the result and in `report.json`; the PDF layout shows a divider and kit names, the checklist gives each kit's stretch, and the app's roll view shows the dividers live. The cut order needs no change: sections do not overlap along the roll, so each kit's cut numbers are one unbroken run.
+- **Freshness:** the fingerprint includes the grouping only when it is by-kit, so global results saved earlier stay current.
+- **Not done:** groups of N kits per section, and a cross-cut between kits on the cut file.
+- **Checked:** core tests (every variant in exactly one section, merge mapping and refusal, stale on change), solver tests (sections in order and end to end, each kit's cut numbers contiguous, live layouts valid, stop after 150 ms still gives every kit, a job without kits is one section), and CLI runs on the demo (kit A 0.02–1.37 m, B 1.37–2.33 m, about 1–4% longer than mixed). The Nest view toggle was checked in the browser preview; the real app was not driven this time (screen control was not approved).
 
 **Phase 2, import settings (so a real job never needs the CLI):**
 - **In the app:** units (from each file's `$INSUNITS`, or forced for every file) and join / gap tolerances, stored in the project as before. The dialog lists each DXF with the units it declares. The inspector shows each ply's size in mm.

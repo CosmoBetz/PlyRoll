@@ -15,6 +15,7 @@ use crate::geom::{Affine, BBox, FlattenMode, Path, Pt, signed_area};
 use crate::import::{ImportOptions, UnitsOverride, import_dxf, units_scale};
 use crate::job::{RefSpec, make_names_unique, resolve_ref};
 use crate::job::validate_material;
+use crate::kits::Grouping;
 use crate::model::{Layout, Material, PlyShape, RefOrigin, Shape, Variant};
 use crate::report::{RunInfo, Summary};
 use anyhow::{Context, Result, anyhow, bail};
@@ -224,11 +225,13 @@ pub struct JobSettings {
     pub time_s: u64,
     /// Complete layups to cut: every quantity is multiplied by this.
     pub sets: u32,
+    /// All plies mixed, or one section of roll per kit.
+    pub grouping: Grouping,
 }
 
 impl Default for JobSettings {
     fn default() -> Self {
-        Self { material: None, time_s: 60, sets: 1 }
+        Self { material: None, time_s: 60, sets: 1, grouping: Grouping::Global }
     }
 }
 
@@ -243,6 +246,7 @@ pub struct NestInput {
     /// Project ply id of each entry in `plies`.
     pub ply_ids: Vec<u64>,
     pub material: Material,
+    pub grouping: Grouping,
     pub warnings: Vec<String>,
     pub fingerprint: String,
 }
@@ -691,8 +695,9 @@ impl Project {
                 }
             }
         }
-        let fingerprint = fingerprint(&plies, &ply_ids, &material);
-        Ok(NestInput { plies, ply_ids, material, warnings, fingerprint })
+        let grouping = self.job.grouping;
+        let fingerprint = fingerprint(&plies, &ply_ids, &material, grouping);
+        Ok(NestInput { plies, ply_ids, material, grouping, warnings, fingerprint })
     }
 
     /// Is the stored result still what nesting the project now would solve?
@@ -704,7 +709,7 @@ impl Project {
     pub fn check_result(&self, r: &NestResult) -> Freshness {
         match self.nest_input(None) {
             Ok(input) if input.fingerprint == r.fingerprint => Freshness { fresh: true, reason: None },
-            Ok(_) => Freshness { fresh: false, reason: Some("plies, quantities, sets or material changed since this nest".into()) },
+            Ok(_) => Freshness { fresh: false, reason: Some("plies, quantities, sets, material or kit grouping changed since this nest".into()) },
             Err(e) => Freshness { fresh: false, reason: Some(format!("{e:#}")) },
         }
     }
@@ -726,13 +731,19 @@ impl Project {
 
 /// Identifies a solver input. Source paths and how the 0° was picked do not
 /// change the nest, so they are left out (a moved project keeps its result).
-fn fingerprint(plies: &[PlyShape], ids: &[u64], material: &Material) -> String {
+/// Global nests hash exactly as before kit grouping existed, so their saved
+/// results stay current.
+fn fingerprint(plies: &[PlyShape], ids: &[u64], material: &Material, grouping: Grouping) -> String {
     let mut plies = plies.to_vec();
     for p in &mut plies {
         p.shape.source_file = PathBuf::new();
         p.ref_origin = RefOrigin::Manual;
     }
-    let json = serde_json::to_string(&(&plies, ids, material)).unwrap_or_default();
+    let json = match grouping {
+        Grouping::Global => serde_json::to_string(&(&plies, ids, material)),
+        g => serde_json::to_string(&(&plies, ids, material, g)),
+    }
+    .unwrap_or_default();
     // FNV-1a, 64 bit: stable across Rust versions, unlike DefaultHasher.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in json.as_bytes() {

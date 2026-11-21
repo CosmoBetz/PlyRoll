@@ -153,6 +153,7 @@ mod tests {
             material: material(),
             placements: places.iter().enumerate().map(|(i, &(r, x, y))| Placement { shape_idx: 0, variant_idx: 0, copy: i as u32 + 1, rotation_deg: r, tx: x, ty: y }).collect(),
             used_length: 100.0,
+            sections: vec![],
         }
     }
 

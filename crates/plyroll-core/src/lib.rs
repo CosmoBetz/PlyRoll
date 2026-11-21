@@ -6,6 +6,7 @@ pub mod export;
 pub mod geom;
 pub mod import;
 pub mod job;
+pub mod kits;
 pub mod model;
 pub mod orient;
 pub mod pdf;

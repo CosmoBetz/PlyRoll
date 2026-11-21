@@ -13,7 +13,8 @@ use plyroll_core::model::{Material, Variant};
 use plyroll_core::project::{ImportReport, ImportSettings, JobSettings, NestResult, Project, RefPick, SourceFile};
 use plyroll_core::report::{ReportMeta, RunInfo, write_outputs};
 use plyroll_core::view::{LayoutShapes, PlacementView, PlyView, ResultView, layout_shapes, placement_views, project_view, result_view};
-use plyroll_nest::{NestOptions, nest};
+use plyroll_core::kits::LayoutSection;
+use plyroll_nest::{NestOptions, nest_job};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -418,6 +419,17 @@ struct NestProgress {
     density: f64,
     elapsed: f64,
     placements: Option<Vec<PlacementView>>,
+    /// Kit sections of the live layout (kit by kit only).
+    sections: Option<Vec<LayoutSection>>,
+    /// Kit being nested (kit by kit only).
+    section: Option<SectionView>,
+}
+
+#[derive(Clone, Serialize)]
+struct SectionView {
+    index: usize,
+    count: usize,
+    kit: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -450,22 +462,42 @@ fn start_nest(app: AppHandle, state: Shared) -> CmdResult<NestStarted> {
         let opts = NestOptions { time: Duration::from_secs(time_s), seed: Some(seed), workers, live_layout: Some(LIVE_EVERY), ..NestOptions::default() };
         let start = Instant::now();
         let mut best = f64::INFINITY;
+        let mut section = usize::MAX;
         let mut last_emit: Option<Instant> = None;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            nest(
+            nest_job(
                 &input.plies,
                 &input.material,
+                input.grouping,
                 &opts,
                 |p| {
+                    // Kit by kit, the length restarts with every kit.
+                    if let Some(s) = &p.section
+                        && s.index != section
+                    {
+                        section = s.index;
+                        best = f64::INFINITY;
+                    }
                     let improved = p.length < best - 1e-6;
                     best = best.min(p.length);
                     let due = last_emit.is_none_or(|t| t.elapsed() >= Duration::from_millis(150));
                     if p.layout.is_some() || (improved && due) {
                         last_emit = Some(Instant::now());
                         let placements = p.layout.as_ref().map(|l| placement_views(&input.plies, l));
+                        let sections = p.layout.as_ref().filter(|l| !l.sections.is_empty()).map(|l| l.sections.clone());
+                        let section = p.section.as_ref().map(|s| SectionView { index: s.index, count: s.count, kit: s.kit.clone() });
                         let _ = app.emit(
                             "nest-progress",
-                            NestProgress { run: id, phase: p.phase, length: best, density: p.density, elapsed: p.elapsed.as_secs_f64(), placements },
+                            NestProgress {
+                                run: id,
+                                phase: p.phase,
+                                length: best,
+                                density: p.density,
+                                elapsed: p.elapsed.as_secs_f64(),
+                                placements,
+                                sections,
+                                section,
+                            },
                         );
                     }
                 },

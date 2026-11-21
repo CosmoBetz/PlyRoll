@@ -60,7 +60,7 @@ function fakeNest(plies: Ply[], job: JobSettings, shuffle: number): { shapes: La
 
 export function createMockBackend(): Backend {
   let plies: Ply[] = structuredClone(demo as unknown as Ply[]);
-  let job: JobSettings = { material: null, time_s: 30, sets: 1 };
+  let job: JobSettings = { material: null, time_s: 30, sets: 1, grouping: "global" };
   let importSettings: ImportSettings = { units: "auto", join_tol: 0.01, gap_tol: 0.1, curve_tol: 0.01 };
   let undo: Snapshot[] = [];
   let redo: Snapshot[] = [];
@@ -125,7 +125,7 @@ export function createMockBackend(): Backend {
     newProject: async () => {
       running?.stop();
       result = null;
-      job = { material: null, time_s: 30, sets: 1 };
+      job = { material: null, time_s: 30, sets: 1, grouping: "global" };
       plies = [];
       undo = [];
       redo = [];
@@ -296,6 +296,7 @@ export function createMockBackend(): Backend {
           used_length: best.length,
           shapes,
           placements: best.placements,
+          sections: [],
         };
         dirty = true;
         listeners.forEach((l) => l.done({ run: id, error: null, stopped }));
@@ -305,7 +306,7 @@ export function createMockBackend(): Backend {
         const next = fakeNest(plies, job, step);
         if (next.length < best.length) best = next;
         const elapsed = (Date.now() - start) / 1000;
-        listeners.forEach((l) => l.progress({ run: id, phase: elapsed < (total / 1000) * 0.8 ? "explore" : "compress", length: best.length, density: 0.7, elapsed, placements: best.placements }));
+        listeners.forEach((l) => l.progress({ run: id, phase: elapsed < (total / 1000) * 0.8 ? "explore" : "compress", length: best.length, density: 0.7, elapsed, placements: best.placements, sections: null, section: null }));
         if (Date.now() - start >= total) finish(false);
       }, 400);
       running = { id, stop: () => finish(true) };

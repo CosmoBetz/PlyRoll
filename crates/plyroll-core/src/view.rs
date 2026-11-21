@@ -175,6 +175,8 @@ pub struct ResultView {
     pub used_length: f64,
     pub shapes: LayoutShapes,
     pub placements: Vec<PlacementView>,
+    /// Kit sections along the roll (kit-by-kit nests only).
+    pub sections: Vec<crate::kits::LayoutSection>,
 }
 
 pub fn result_view(project: &Project, r: &crate::project::NestResult) -> ResultView {
@@ -188,5 +190,6 @@ pub fn result_view(project: &Project, r: &crate::project::NestResult) -> ResultV
         used_length: r.layout.used_length,
         shapes: layout_shapes(&r.plies, &r.layout.material),
         placements: placement_views(&r.plies, &r.layout),
+        sections: r.layout.sections.clone(),
     }
 }

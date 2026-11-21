@@ -146,6 +146,9 @@ pub struct Layout {
     pub placements: Vec<Placement>,
     /// Roll length consumed, including lead trim, mm.
     pub used_length: f64,
+    /// Kit sections along the roll, when nested kit by kit (empty otherwise).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<crate::kits::LayoutSection>,
 }
 
 pub fn pt_list(path: &Path, tol: f64) -> Vec<Pt> {
