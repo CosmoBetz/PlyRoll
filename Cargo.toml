@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crates/turbonest-core", "crates/turbonest-nest", "crates/turbonest-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dxf = "0.6.2"
+geo = "0.33"
+polylabel = "3"
+csv = "1"
+toml = "0.9"
+jagua-rs = { version = "=2.0.0", features = ["spp"] }
+# sparrow is not published on crates.io; pin an exact commit.
+sparrow = { git = "https://github.com/JeroenGar/sparrow", rev = "b8ef03312b7a195895f6c5332c6674dd78420ede" }
+rand = "0.10"
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
+ctrlc = "3"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+# Optimise the solver even in debug builds; it is unusably slow otherwise.
+[profile.dev.package."*"]
+opt-level = 3

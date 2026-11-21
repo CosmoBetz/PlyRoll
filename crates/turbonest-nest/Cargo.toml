@@ -1,0 +1,13 @@
+[package]
+name = "turbonest-nest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+turbonest-core = { path = "../turbonest-core" }
+anyhow.workspace = true
+log.workspace = true
+jagua-rs.workspace = true
+sparrow.workspace = true
+rand.workspace = true

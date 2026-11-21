@@ -1,0 +1,10 @@
+# file, 0° reference, angle variants (angle x quantity), cosmetic, mirror, kit, name
+file,ref,variants,cosmetic,mirror,kit,name
+samples/rib.dxf,x,0x4 +45x2 -45x2,,,A,
+samples/gusset.dxf,longest-edge,0x3 90x3,,,A,
+samples/flange.dxf,layer,0x2 +45x2 -45x2,,,B,
+samples/patch.dxf,0,0x6,,,B,
+samples/skin.dxf,bbox,0x2 +45x1 -45x1,yes,,A,
+samples/doubler.dxf,y,0x2 90x2,,,B,
+samples/tab_inch.dxf,x,+30x2 -60x2,,,B,
+samples/oval.dxf,x,0x2,,yes,A,oval-mirror

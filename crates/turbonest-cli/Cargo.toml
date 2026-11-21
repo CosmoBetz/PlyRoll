@@ -1,0 +1,19 @@
+[package]
+name = "turbonest-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "turbonest"
+path = "src/main.rs"
+
+[dependencies]
+turbonest-core = { path = "../turbonest-core" }
+turbonest-nest = { path = "../turbonest-nest" }
+anyhow.workspace = true
+log.workspace = true
+clap.workspace = true
+env_logger.workspace = true
+ctrlc.workspace = true
+serde_json = "1"
