@@ -1,13 +1,20 @@
 # PlyRoll — plan for a free, local 2D nesting tool for prepreg plies
 
-Status: revised 2026-11-21. **Phase 1 (CLI) is built. Phase 2 has the orientation editor, material library, job settings, live nesting, saved results and cut-file export; reports are next.** See the README for usage.
+Status: revised 2026-11-21. **Phase 1 (CLI) is built. Phase 2 has the orientation editor, material library, job settings, live nesting, saved results, cut-file export and reports.** See the README for usage.
+
+**Phase 2, reports:**
+- **report.pdf** (A4 landscape, written with `pdf-writer`, base fonts only, nothing embedded): material, used length, both utilisations, scrap, cost, verification, solve time; the layout coloured by angle with cut numbers and a position scale, split into stacked strips for long jobs; then a kit checklist with one tick box per ply, its cut number and position on the roll.
+- **labels.csv:** one row per cut ply for label printers (ZPL stays P2).
+- **One cut number everywhere:** `plies.csv` order, `labels.csv`, and the report all use `export::cut_order`.
+- **Differences from §5.7:** no roll or batch on the report (roll inventory is Phase 3); the checklist is in project order (kit, shape, angle) because the model has no layup sequence yet. Like the cut files, the report and labels are only written when verification passes. The date is UTC.
+- **Checked:** unit tests for the checklist (every ply once, kits in order, no-kit last), labels.csv against plies.csv, and no report on a failed layout. Reports for the demo (2 pages) and a 5-set job (11.5 m, 220 plies, 4 pages) were read page by page; Ghostscript parses them without errors.
 
 **Phase 2, second part (material library, nesting, results):**
 - **Material library:** one TOML file in the app's config folder (macOS: `~/Library/Application Support/org.plyroll.desktop/materials.toml`), the same format the CLI reads with `--materials`, so it can be shared and edited by hand. TOML instead of the JSON planned in §5.3, so there is one format. The project keeps its own copy of the chosen material; editing the library never changes a project until the material is picked again. A library file that fails to load is never overwritten.
 - **Job settings in the project:** material, time budget (30 s / 2 min / 10 min presets or custom) and set multiplier. The multiplier is applied in `plyroll-core` (`Project::nest_input`), so the CLI and the app build the same job.
 - **Live nesting:** the adapter maps intermediate solutions to full layouts every ~400 ms. Stop keeps the best layout found, which is complete and verified like a finished one.
 - **Saved results:** a project stores the last result with the exact solver input it was made from and a fingerprint of plies, quantities, sets and material. Any edit marks it *out of date* (shown, export disabled); undo makes it current again. Results are outside undo, so undo never deletes a nest. Geometry round-trips bit-exactly (`serde_json` `float_roundtrip`), so a saved result is still current after reopening.
-- **Export:** the app writes the same files as the CLI (`report.json`, `layout.svg`, and only when verification passes `layout.dxf` and `plies.csv`), through one shared `plyroll-core::report` function.
+- **Export:** the app writes the same files as the CLI (`report.json`, `layout.svg`, and only when verification passes `layout.dxf`, `plies.csv`, `report.pdf` and `labels.csv`), through one shared `plyroll-core::report` function.
 - **CLI:** `-m` is optional for a project that has a material; `--time` defaults to the project's.
 - **Checked:** core, nest and round-trip tests (34) pass. In the desktop app: add a material, nest the demo (30 s, stopped at 17 s: 2298 mm, 80.0% of usable area, verified), stale/undo, save, reopen, export. The app's DXF has the same layers and entity counts as a CLI run on the same project (50 cut contours = 44 plies + 6 holes).
 
@@ -26,7 +33,7 @@ Status: revised 2026-11-21. **Phase 1 (CLI) is built. Phase 2 has the orientatio
 - **Solver versions:** sparrow is pinned to git commit `b8ef033`, because it is not on crates.io. It already uses jagua-rs 2.0.0, not 1.0.0 as its README says.
 - **Edge spacing:** jagua-rs keeps items one full `spacing` away from the strip boundary. The adapter compensates, so plies may touch the trim lines.
 - **Rotations:** solver rotations (f32) are snapped back to the exact allowed angle around the part's centre.
-- **Not done yet:** PDF output (the SVG prints at true size), identical-outline merging across files, and handles on DXF table headers. ezdxf reads the files and adds the missing handles itself.
+- **Not done yet:** a true-size PDF of the layout (the SVG prints at true size), identical-outline merging across files, and handles on DXF table headers. ezdxf reads the files and adds the missing handles itself.
 - **Checked:** 23 tests pass (geometry, importer, orientation rules, verifier, nest → DXF → re-import round trip). On the demo job (44 plies, 600 mm roll, 30 s): UD 2324 mm / 75.8%; twill with warp/weft swap 2271 mm / 77.6%.
 
 **Decided so far:**
@@ -304,7 +311,7 @@ flowchart LR
 | Polygons and offsets | `geo`, `i_overlay` (or `clipper2`) | Booleans, offsets, area and validity checks. |
 | Curves | `kurbo` | Arc and spline flattening with a tolerance. |
 | SVG import | `usvg` | Robust SVG parsing. |
-| PDF | `krilla` or `printpdf` | Reports and 1:1 templates. |
+| PDF | `pdf-writer` (reports, done); `krilla` if embedded fonts are needed | Reports and 1:1 templates. |
 | Labels | `polylabel` | Label anchor at the pole of inaccessibility. |
 | Templates | `minijinja` | G-code and HPGL post-processors as user-editable templates. |
 

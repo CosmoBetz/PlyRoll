@@ -8,6 +8,7 @@ pub mod import;
 pub mod job;
 pub mod model;
 pub mod orient;
+pub mod pdf;
 pub mod project;
 pub mod report;
 pub mod verify;

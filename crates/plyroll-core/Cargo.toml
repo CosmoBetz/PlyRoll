@@ -14,3 +14,5 @@ geo.workspace = true
 polylabel.workspace = true
 csv.workspace = true
 toml.workspace = true
+pdf-writer.workspace = true
+miniz_oxide.workspace = true

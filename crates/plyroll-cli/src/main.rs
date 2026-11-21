@@ -12,7 +12,7 @@ use plyroll_core::import::{ImportOptions, UnitsOverride, import_dxf};
 use plyroll_core::job::{load_job, load_materials, read_job_csv};
 use plyroll_core::model::{Material, PlyShape};
 use plyroll_core::project::{self, Project};
-use plyroll_core::report::{RunInfo, summarize, write_outputs};
+use plyroll_core::report::{ReportMeta, RunInfo, summarize, write_outputs};
 use plyroll_nest::{NestOptions, nest};
 
 #[derive(Parser)]
@@ -82,7 +82,8 @@ struct JobArgs {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Nest a job and write layout.dxf, layout.svg, plies.csv and report.json.
+    /// Nest a job and write the cut files (layout.dxf, plies.csv, labels.csv), report.pdf,
+    /// layout.svg and report.json.
     Nest {
         #[command(flatten)]
         job: JobArgs,
@@ -212,7 +213,7 @@ fn run() -> Result<i32> {
                 cancel,
             )?;
             let run = RunInfo { seed, solve_seconds: start.elapsed().as_secs_f64(), stopped: stopped.load(Ordering::SeqCst) };
-            finish(&job.out, &plies, &layout, &warnings, &run)
+            finish(&job.out, &job.job, &plies, &layout, &warnings, &run)
         }
     }
 }
@@ -284,10 +285,11 @@ fn print_ply_table(plies: &[PlyShape]) {
     }
 }
 
-fn finish(out: &Path, plies: &[PlyShape], layout: &plyroll_core::model::Layout, warnings: &[String], run: &RunInfo) -> Result<i32> {
+fn finish(out: &Path, job: &Path, plies: &[PlyShape], layout: &plyroll_core::model::Layout, warnings: &[String], run: &RunInfo) -> Result<i32> {
     let m = &layout.material;
     let sum = summarize(plies, layout);
-    let written = write_outputs(out, plies, layout, &sum, run, warnings)?;
+    let name = job.file_stem().map_or_else(|| "job".to_string(), |s| s.to_string_lossy().into_owned());
+    let written = write_outputs(out, plies, layout, &sum, run, warnings, &ReportMeta::new(name))?;
     let report = &sum.verification;
 
     println!("\nused length   {:.1} mm  ({:.3} m² of roll)", layout.used_length, sum.roll_area_m2);

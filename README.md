@@ -3,7 +3,7 @@
 Free, local nesting for carbon-fibre prepreg plies on an endless roll.
 Every ply keeps its fibre direction (UD) or warp direction (twill); plies are never flipped.
 
-Status: **Phase 1 command-line tool; Phase 2 desktop app with orientation editor, material library and nesting. Reports are next.** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
+Status: **Phase 1 command-line tool; Phase 2 desktop app with orientation editor, material library, nesting and reports.** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
 Nesting is done by [sparrow](https://github.com/JeroenGar/sparrow) on top of
 [jagua-rs](https://github.com/JeroenGar/jagua-rs).
 
@@ -144,6 +144,8 @@ Allowed placement rotations:
 | `layout.dxf` | layers `CUT` (outlines + holes, exact arcs, roll order, holes first), `MARK` (fibre line per ply + source marks), `LABEL` (text), `ROLL` (edges, trims, lead trim) |
 | `layout.svg` | preview, true size in mm |
 | `plies.csv` | every cut ply in cutting order with position, rotation, kit and source |
+| `report.pdf` | nest report (A4 landscape): material, length, utilisation, scrap, cost, verification, the layout with cut numbers and a position scale, then a kit checklist with a tick box per ply, its cut number and its position on the roll |
+| `labels.csv` | one row per cut ply for label printers: cut number, label text, shape, angle, copy *n of m*, kit, material, job, position |
 | `report.json` | length, utilisation, cost, verification result, full layout |
 | `orientation.svg` | 0° axes and fibre directions before nesting |
 
@@ -152,6 +154,10 @@ Roll coordinates: x along the roll from its start, y across it from one edge.
 Every layout is re-checked with the exact geometry before any cut file is written:
 quantities, fibre direction, no part outside the trims, spacing between parts.
 If a check fails, only `layout.svg` and `report.json` are written and the exit code is 2.
+
+The cut number is the same everywhere: the `order` column of `plies.csv`, `cut_no` in `labels.csv`, and the numbers on
+the report's layout and checklist. The checklist groups plies by kit, in the project's order (shape, then angle); there
+is no separate layup sequence yet.
 
 ## Importer
 
@@ -163,9 +169,8 @@ are ignored.
 
 ## Known limits
 
-- No PDF report or kit checklist yet (`report.json` and `plies.csv` hold the data).
 - No manual editing of a layout, and no warm start from a previous result.
-- No PDF output yet. The SVG prints at true size.
+- No true-size PDF of the layout (for printing templates) yet. The SVG prints at true size.
 - Parts are not nested inside other parts' holes.
 - DXF table headers have no handles (a quirk of the `dxf` crate writer). ezdxf and PlyRoll read the files fine.
   Check that your cutter software does too.

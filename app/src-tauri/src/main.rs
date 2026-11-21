@@ -11,7 +11,7 @@
 use plyroll_core::job::{load_materials, save_materials};
 use plyroll_core::model::{Material, Variant};
 use plyroll_core::project::{ImportReport, JobSettings, NestResult, Project, RefPick};
-use plyroll_core::report::{RunInfo, write_outputs};
+use plyroll_core::report::{ReportMeta, RunInfo, write_outputs};
 use plyroll_core::view::{LayoutShapes, PlacementView, PlyView, ResultView, layout_shapes, placement_views, project_view, result_view};
 use plyroll_nest::{NestOptions, nest};
 use serde::Serialize;
@@ -500,7 +500,8 @@ fn export_result(dir: String, state: Shared) -> CmdResult<Vec<String>> {
     if !r.summary.verification.ok {
         return Err(format!("the nest failed verification, so no cut files are written:\n{}", r.summary.verification.issues.join("\n")));
     }
-    let files = write_outputs(&PathBuf::from(dir), &r.plies, &r.layout, &r.summary, &r.run, &r.warnings).map_err(err)?;
+    let job = st.path.as_ref().and_then(|p| p.file_stem()).map_or_else(|| "Untitled".to_string(), |s| s.to_string_lossy().into_owned());
+    let files = write_outputs(&PathBuf::from(dir), &r.plies, &r.layout, &r.summary, &r.run, &r.warnings, &ReportMeta::new(job)).map_err(err)?;
     Ok(files.iter().map(|p| p.display().to_string()).collect())
 }
 

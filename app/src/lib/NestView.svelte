@@ -188,8 +188,8 @@
         <dt>Material</dt><dd>{result.shapes.material.name}</dd>
         <dt>Solved in</dt><dd class="num">{fmtTime(result.run.solve_seconds)}{result.run.stopped ? " (stopped)" : ""}</dd>
       </dl>
-      <button class="primary big" onclick={onexport} disabled={!!exportBlock} title={exportBlock ?? "Write layout.dxf, layout.svg, plies.csv and report.json"}>Export cut files…</button>
-      {#if exportBlock}<p class="hint">{exportBlock}.</p>{:else}<p class="hint">Writes layout.dxf (CUT, LABEL, ROLL layers), layout.svg, plies.csv and report.json.</p>{/if}
+      <button class="primary big" onclick={onexport} disabled={!!exportBlock} title={exportBlock ?? "Write the cut files, report.pdf and labels.csv"}>Export cut files…</button>
+      {#if exportBlock}<p class="hint">{exportBlock}.</p>{:else}<p class="hint">Writes layout.dxf (CUT, MARK, LABEL, ROLL layers), report.pdf (numbers, layout, kit checklist), labels.csv for label printers, plies.csv, layout.svg and report.json.</p>{/if}
       {#if result.warnings.length}
         <details><summary>{result.warnings.length} warning{result.warnings.length === 1 ? "" : "s"}</summary><ul>{#each result.warnings as w}<li>{w}</li>{/each}</ul></details>
       {/if}

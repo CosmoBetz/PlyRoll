@@ -171,7 +171,7 @@ pub fn write_dxf(path: &FsPath, plies: &[PlyShape], layout: &Layout) -> Result<(
 }
 
 /// Colour per ply angle (same angle -> same colour across shapes).
-fn angle_color(angle: f64) -> &'static str {
+pub(crate) fn angle_color(angle: f64) -> &'static str {
     const PALETTE: [&str; 8] = ["#e45756", "#54a24b", "#4c78a8", "#f2b701", "#b279a2", "#72b7b2", "#ff9da6", "#9d755d"];
     let a = norm_deg(angle);
     let idx = match a.round() as i64 {

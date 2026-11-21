@@ -1,7 +1,9 @@
-//! Numbers for a finished layout and the cut files written from it. Shared by
-//! the CLI and the desktop app so both produce the same report.json.
+//! Numbers for a finished layout and the files written from it: report.json,
+//! the cut files, the kit checklist (report.pdf) and labels.csv. Shared by the
+//! CLI and the desktop app so both write exactly the same files.
 
 use crate::export;
+use crate::geom::{BBox, FlattenMode};
 use crate::model::{Layout, PlyShape};
 use crate::verify::{VerifyReport, verify};
 use anyhow::{Context, Result};
@@ -49,9 +51,176 @@ pub struct RunInfo {
     pub stopped: bool,
 }
 
-/// Writes report.json and layout.svg always, and layout.dxf + plies.csv only
-/// when verification passed. Returns the files written.
-pub fn write_outputs(dir: &Path, plies: &[PlyShape], layout: &Layout, summary: &Summary, run: &RunInfo, warnings: &[String]) -> Result<Vec<PathBuf>> {
+/// Job name and date printed on report.pdf and in labels.csv.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReportMeta {
+    pub job: String,
+    pub date: String,
+}
+
+impl ReportMeta {
+    /// Dated now (UTC).
+    pub fn new(job: impl Into<String>) -> Self {
+        Self { job: job.into(), date: now_utc() }
+    }
+}
+
+/// Current date and time as "2026-11-21 14:05 UTC".
+pub fn now_utc() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
+    let t = secs.rem_euclid(86_400);
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02} UTC", t / 3600, t % 3600 / 60)
+}
+
+/// Days since 1970-01-01 to (year, month, day), proleptic Gregorian.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
+}
+
+/// One cut ply. `cut_no` is its place in the cutting order, the same number
+/// as the `order` column of plies.csv and the number on the report's layout.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CutPly {
+    pub cut_no: usize,
+    /// Index into `layout.placements`.
+    #[serde(skip)]
+    pub placement: usize,
+    pub label: String,
+    pub shape: String,
+    pub angle_deg: f64,
+    pub copy: u32,
+    /// Copies of this shape at this angle in the job.
+    pub of: u32,
+    pub kit: Option<String>,
+    /// Lower-left corner of the ply's bounding box on the roll: x from the
+    /// roll start, y from the roll edge at y = 0.
+    pub x_mm: f64,
+    pub y_mm: f64,
+}
+
+/// Every placement in cutting order.
+pub fn cut_plies(plies: &[PlyShape], layout: &Layout) -> Vec<CutPly> {
+    export::cut_order(plies, layout)
+        .into_iter()
+        .enumerate()
+        .map(|(n, i)| {
+            let pl = &layout.placements[i];
+            let ply = &plies[pl.shape_idx];
+            let v = &ply.variants[pl.variant_idx];
+            let b = BBox::of(&export::placed_path(&ply.shape.outer, pl).flatten(0.5, FlattenMode::Inscribed));
+            CutPly {
+                cut_no: n + 1,
+                placement: i,
+                label: export::label_text(ply, pl),
+                shape: ply.shape.name.clone(),
+                angle_deg: v.angle_deg,
+                copy: pl.copy,
+                of: v.qty,
+                kit: v.kit.clone(),
+                x_mm: b.min.x,
+                y_mm: b.min.y,
+            }
+        })
+        .collect()
+}
+
+/// One line of the kit checklist: one shape at one angle.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChecklistRow {
+    pub label: String,
+    pub shape: String,
+    pub angle_deg: f64,
+    /// Its cut plies, by cut number.
+    pub cuts: Vec<CutPly>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct KitGroup {
+    /// None = plies without a kit.
+    pub kit: Option<String>,
+    pub rows: Vec<ChecklistRow>,
+}
+
+impl KitGroup {
+    pub fn plies(&self) -> usize {
+        self.rows.iter().map(|r| r.cuts.len()).sum()
+    }
+}
+
+/// Plies grouped by kit, for picking. The model has no layup sequence, so kits
+/// and rows follow the project's order (shape, then angle); plies without a
+/// kit come last.
+pub fn checklist(plies: &[PlyShape], layout: &Layout) -> Vec<KitGroup> {
+    let mut rows: Vec<((usize, usize), ChecklistRow)> = Vec::new();
+    for c in cut_plies(plies, layout) {
+        let pl = &layout.placements[c.placement];
+        let key = (pl.shape_idx, pl.variant_idx);
+        match rows.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, r)) => r.cuts.push(c),
+            None => rows.push((
+                key,
+                ChecklistRow { label: c.label.clone(), shape: c.shape.clone(), angle_deg: c.angle_deg, cuts: vec![c] },
+            )),
+        }
+    }
+    rows.sort_by_key(|(k, _)| *k);
+    let mut groups: Vec<KitGroup> = Vec::new();
+    for (_, row) in rows {
+        let kit = row.cuts[0].kit.clone();
+        match groups.iter_mut().find(|g| g.kit == kit) {
+            Some(g) => g.rows.push(row),
+            None => groups.push(KitGroup { kit, rows: vec![row] }),
+        }
+    }
+    // Stable sort: kits keep their first-seen order, "no kit" moves to the end.
+    groups.sort_by_key(|g| g.kit.is_none());
+    groups
+}
+
+/// labels.csv: one row per cut ply in cutting order, for label printers.
+pub fn write_label_csv(path: &Path, plies: &[PlyShape], layout: &Layout, meta: &ReportMeta) -> Result<()> {
+    let mut w = csv::Writer::from_path(path).with_context(|| format!("cannot write {}", path.display()))?;
+    w.write_record(["cut_no", "label", "shape", "angle_deg", "copy", "of", "kit", "material", "job", "x_mm", "y_mm"])?;
+    for c in cut_plies(plies, layout) {
+        w.write_record([
+            c.cut_no.to_string(),
+            c.label,
+            c.shape,
+            format!("{}", c.angle_deg),
+            c.copy.to_string(),
+            c.of.to_string(),
+            c.kit.unwrap_or_default(),
+            layout.material.name.clone(),
+            meta.job.clone(),
+            format!("{:.1}", c.x_mm),
+            format!("{:.1}", c.y_mm),
+        ])?;
+    }
+    w.flush()?;
+    Ok(())
+}
+
+/// Writes report.json and layout.svg always; layout.dxf, plies.csv,
+/// report.pdf and labels.csv only when verification passed. Returns the files
+/// written.
+pub fn write_outputs(
+    dir: &Path,
+    plies: &[PlyShape],
+    layout: &Layout,
+    summary: &Summary,
+    run: &RunInfo,
+    warnings: &[String],
+    meta: &ReportMeta,
+) -> Result<Vec<PathBuf>> {
     std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
     let m = &layout.material;
     let mut json = serde_json::to_value(summary)?;
@@ -85,6 +254,26 @@ pub fn write_outputs(dir: &Path, plies: &[PlyShape], layout: &Layout, summary: &
         let csv = dir.join("plies.csv");
         export::write_ply_csv(&csv, plies, layout)?;
         written.push(csv);
+        let pdf = dir.join("report.pdf");
+        let bytes = crate::pdf::nest_report(plies, layout, summary, run, warnings, meta);
+        std::fs::write(&pdf, bytes).with_context(|| format!("cannot write {}", pdf.display()))?;
+        written.push(pdf);
+        let labels = dir.join("labels.csv");
+        write_label_csv(&labels, plies, layout, meta)?;
+        written.push(labels);
     }
     Ok(written)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::civil_from_days;
+
+    #[test]
+    fn dates() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
+        assert_eq!(civil_from_days(20_778), (2026, 11, 21));
+        assert_eq!(civil_from_days(-1), (1969, 12, 31));
+    }
 }
