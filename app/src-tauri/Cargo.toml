@@ -1,0 +1,21 @@
+[package]
+name = "plyroll-app"
+description = "PlyRoll desktop app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "plyroll-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.7.6", features = [] }
+
+[dependencies]
+plyroll-core = { path = "../../crates/plyroll-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2.12.7", features = [] }
+tauri-plugin-dialog = "2.8.4"

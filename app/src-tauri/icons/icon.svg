@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="strip"><path d="M300 560 H900 V780 H300 Z"/></clipPath>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="200" fill="#1d2633"/>
+  <g clip-path="url(#strip)" stroke="#3b4b60" stroke-width="22">
+    <path d="M300 560 H900 V780 H300 Z" fill="#26313f" stroke="none"/>
+    <path d="M260 800 L520 540 M360 800 L620 540 M460 800 L720 540 M560 800 L820 540 M660 800 L920 540 M760 800 L1020 540"/>
+  </g>
+  <path d="M560 600 L700 600 L760 740 L600 740 Z" fill="none" stroke="#f2b701" stroke-width="22" stroke-linejoin="round"/>
+  <circle cx="330" cy="560" r="220" fill="#e45756"/>
+  <circle cx="330" cy="560" r="150" fill="none" stroke="#1d2633" stroke-width="16" opacity="0.35"/>
+  <circle cx="330" cy="560" r="80" fill="none" stroke="#1d2633" stroke-width="16" opacity="0.35"/>
+  <circle cx="330" cy="560" r="36" fill="#1d2633"/>
+</svg>

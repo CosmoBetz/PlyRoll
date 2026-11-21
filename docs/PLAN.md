@@ -1,6 +1,16 @@
 # PlyRoll — plan for a free, local 2D nesting tool for prepreg plies
 
-Status: revised 2026-11-21. **Phase 1 (CLI) is built.** See the README for usage.
+Status: revised 2026-11-21. **Phase 1 (CLI) is built; Phase 2 has started with the orientation editor.** See the README for usage.
+
+**Phase 2 so far (orientation editor):**
+- **Project file:** `plyroll-core::project` holds a `.plyroll` JSON project. It caches the geometry, so the project opens without the DXFs. Source paths are stored relative to the project.
+- **Re-import:** a part is matched by file and part name and keeps its 0° reference. If its outline signature changed, it is flagged for a check. The signature is translation-invariant but deliberately not rotation-invariant: a part rotated in CAD must be re-checked.
+- **References:** 0° is kept in (−90°, 90°]. Edge clicks, two-point picks, rules (X / Y / longest edge / bounding box / fibre layer), typed angles and ±1° / ±15° turns all go through one core function, shared with the CSV path. Mirroring flips the reference and asks for a re-check.
+- **Nesting:** blocked while any ply with quantities has no confirmed 0°. Plies without quantities are left out with a warning.
+- **App:** a Tauri 2 shell (`app/src-tauri`, Rust commands, undo / redo) with a Svelte 5 UI (`app/src`). The UI has a browser mock fed with real view data, for UI work.
+- **CLI:** `nest` and `check` accept `.plyroll`; `convert` turns a job CSV into a project.
+- **Checked:** the project path produces the same solver instance as the CSV path. Seeded runs still differ, because the multi-threaded search is time-limited.
+
 
 **Phase 1 as built (differences from the plan below):**
 - **Crates:** three instead of nine. `plyroll-core` holds geometry, import, model, orient, job, verify and export as modules. `plyroll-nest` is the sparrow adapter, the only crate that touches the solver. `plyroll-cli` is the `plyroll` binary. Modules can be split into crates later if needed.

@@ -181,16 +181,20 @@ pub fn load_job(rows: &[JobRow], base_opts: &ImportOptions) -> Result<LoadedJob>
             plies.push(PlyShape { shape, ref_deg, ref_origin, cosmetic: row.cosmetic, variants });
         }
     }
-    // Shape names must be unique for labels.
+    make_names_unique(&mut plies);
+    Ok(LoadedJob { plies, warnings })
+}
+
+/// Shape names must be unique for labels: repeats get a `~n` suffix.
+pub fn make_names_unique(plies: &mut [PlyShape]) {
     let mut seen: HashMap<String, usize> = HashMap::new();
-    for p in &mut plies {
+    for p in plies {
         let n = seen.entry(p.shape.name.clone()).or_default();
         *n += 1;
         if *n > 1 {
             p.shape.name = format!("{}~{}", p.shape.name, n);
         }
     }
-    Ok(LoadedJob { plies, warnings })
 }
 
 #[derive(serde::Deserialize)]

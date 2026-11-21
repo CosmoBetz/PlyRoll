@@ -3,7 +3,7 @@
 Free, local nesting for carbon-fibre prepreg plies on an endless roll.
 Every ply keeps its fibre direction (UD) or warp direction (twill); plies are never flipped.
 
-Status: **Phase 1 — command-line tool.** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
+Status: **Phase 1 command-line tool; Phase 2 orientation editor (desktop app) started.** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
 Nesting is done by [sparrow](https://github.com/JeroenGar/sparrow) on top of
 [jagua-rs](https://github.com/JeroenGar/jagua-rs).
 
@@ -33,6 +33,45 @@ cargo run -p plyroll-core --example make_samples -- examples/demo/samples
 
 `check` only imports the job and writes `orientation.svg`, which shows each shape's 0° axis (dashed) and the fibre
 direction of every angle variant (coloured hatching). Look at it before nesting.
+
+## Orientation editor (desktop app)
+
+A Tauri app for setting each ply's 0° direction by eye and listing its ply angles.
+It saves a `.plyroll` project (JSON). The CLI nests that project directly.
+
+Needs Node.js 20.19+ as well as Rust. On macOS, the Xcode command-line tools are enough.
+
+```bash
+cd app && npm install
+```
+
+```bash
+cd app && npm run tauri dev
+```
+
+How to use it:
+
+1. **Import DXF…** (or drop files on the window). Every outline becomes a ply.
+   A line on a `FIBRE*` / `0DEG*` layer sets its 0° automatically.
+2. Set 0° on each ply in the large view:
+   - **click an edge** that runs along 0°;
+   - or **P** and two points (they snap to corners);
+   - or **X**, **Y**, **L** (longest edge), **B** (bounding box), **F** (fibre layer), or type an angle;
+   - **[ ]** or **Q E** turn 0° by 1°; hold Shift for 15°.
+3. Add the ply angles and quantities (quick buttons 0 / +45 / −45 / 90, quasi-iso set).
+   The hatching previews each angle's fibre direction.
+4. Badges show *no 0°*, *check 0°* (outline changed in the DXF, or mirrored) and *0° set*.
+   **N** jumps to the next ply that needs attention; **Enter** confirms.
+   Select several plies (⌘/⇧-click) to apply a rule or angle list to all of them.
+5. Save, then nest:
+
+```bash
+./target/release/plyroll nest my-job.plyroll -m UD-T700-150 -o out/my-job
+```
+
+**Reload DXFs** re-reads every file. 0° references are kept, and parts whose outline changed are flagged for a check.
+`plyroll convert job.csv` turns an existing job CSV into a project. `npm run dev` (in `app/`) runs the UI in a
+browser with demo data, for UI work without the desktop shell.
 
 ## Job file (CSV)
 
@@ -104,9 +143,9 @@ warning (`--gap-tol`, default 0.1 mm), removes duplicate entities, finds holes, 
 stops on self-intersecting outlines. Layers named `MARK*`, `PEN*` … are carried as marking; `DIM*`, `TEXT*`, `INFO*` …
 are ignored.
 
-## Known limits (Phase 1)
+## Known limits
 
-- No GUI yet. The 0° reference comes from the CSV (the orientation editor is Phase 2).
+- The desktop app only covers the orientation editor so far. Nesting, materials and reports are still in the CLI.
 - No PDF output yet. The SVG prints at true size.
 - Parts are not nested inside other parts' holes.
 - DXF table headers have no handles (a quirk of the `dxf` crate writer). ezdxf and PlyRoll read the files fine.

@@ -11,6 +11,7 @@ use plyroll_core::geom::{BBox, FlattenMode};
 use plyroll_core::import::{ImportOptions, UnitsOverride, import_dxf};
 use plyroll_core::job::{load_job, load_materials, read_job_csv};
 use plyroll_core::model::{Material, PlyShape};
+use plyroll_core::project::{self, Project};
 use plyroll_core::verify::verify;
 use plyroll_nest::{NestOptions, nest};
 
@@ -63,9 +64,9 @@ impl ImportArgs {
 
 #[derive(clap::Args, Clone)]
 struct JobArgs {
-    /// Job CSV (columns: file, ref, variants, cosmetic, mirror, kit, name).
+    /// Job CSV (columns: file, ref, variants, cosmetic, mirror, kit, name) or a .plyroll project.
     job: PathBuf,
-    /// Material library (TOML). Default: materials.toml next to the job CSV.
+    /// Material library (TOML). Default: materials.toml next to the job file.
     #[arg(long)]
     materials: Option<PathBuf>,
     /// Material name from the library.
@@ -87,7 +88,7 @@ enum Cmd {
         /// Optimisation time in seconds.
         #[arg(long, short, default_value_t = 60)]
         time: u64,
-        /// Random seed (same seed + same input = same layout).
+        /// Random seed. Runs differ anyway when several threads race against the time limit.
         #[arg(long)]
         seed: Option<u64>,
         /// Worker threads (default: all cores).
@@ -104,6 +105,16 @@ enum Cmd {
     Check {
         #[command(flatten)]
         job: JobArgs,
+    },
+    /// Convert a job CSV into a .plyroll project for the orientation editor.
+    Convert {
+        /// Job CSV.
+        job: PathBuf,
+        /// Project file to write (default: the CSV name with .plyroll).
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+        #[command(flatten)]
+        import: ImportArgs,
     },
     /// List the parts found in DXF files: size, edges, fibre-layer lines, warnings.
     Inspect {
@@ -129,6 +140,20 @@ fn run() -> Result<i32> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Inspect { files, import } => inspect(&files, &import.options()),
+        Cmd::Convert { job, out, import } => {
+            let rows = read_job_csv(&job)?;
+            let name = job.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "project".into());
+            let o = import.options();
+            let settings = project::ImportSettings { units: o.units, join_tol: o.join_tol, gap_tol: o.gap_tol, curve_tol: o.curve_tol };
+            let (built, warnings) = Project::from_job(&name, &rows, settings)?;
+            for w in &warnings {
+                eprintln!("warning: {w}");
+            }
+            let out = out.unwrap_or_else(|| job.with_extension(project::EXTENSION));
+            built.save(&out)?;
+            println!("wrote {} ({} ply shapes)", out.display(), built.plies.len());
+            Ok(0)
+        }
         Cmd::Check { job } => {
             let (plies, material, _) = prepare(&job)?;
             println!("{} ply shapes, material {} ({:.0} mm roll, {:.0} mm usable)", plies.len(), material.name, material.roll_width, material.usable_width());
@@ -197,14 +222,28 @@ fn prepare(job: &JobArgs) -> Result<(Vec<PlyShape>, Material, Vec<String>)> {
         let names: Vec<&str> = materials.iter().map(|m| m.name.as_str()).collect();
         bail!("material '{}' not found in {} (available: {})", job.material, mat_path.display(), names.join(", "));
     };
-    let rows = read_job_csv(&job.job)?;
-    let loaded = load_job(&rows, &job.import.options())?;
-    for w in &loaded.warnings {
+    let (plies, warnings) = load_plies(job)?;
+    for w in &warnings {
         eprintln!("warning: {w}");
     }
     std::fs::create_dir_all(&job.out).with_context(|| format!("cannot create {}", job.out.display()))?;
-    export::write_orientation_preview(&job.out.join("orientation.svg"), &loaded.plies)?;
-    Ok((loaded.plies, material, loaded.warnings))
+    export::write_orientation_preview(&job.out.join("orientation.svg"), &plies)?;
+    Ok((plies, material, warnings))
+}
+
+fn is_project(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e.eq_ignore_ascii_case(project::EXTENSION))
+}
+
+/// Plies from a job CSV or a `.plyroll` project (made in the orientation editor).
+fn load_plies(job: &JobArgs) -> Result<(Vec<PlyShape>, Vec<String>)> {
+    if is_project(&job.job) {
+        let proj = Project::load(&job.job)?;
+        return proj.to_plies().with_context(|| format!("project {}", job.job.display()));
+    }
+    let rows = read_job_csv(&job.job)?;
+    let loaded = load_job(&rows, &job.import.options())?;
+    Ok((loaded.plies, loaded.warnings))
 }
 
 fn print_ply_table(plies: &[PlyShape]) {

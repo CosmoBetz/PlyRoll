@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::f64::consts::{PI, TAU};
 use std::path::Path as FsPath;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum UnitsOverride {
     /// Use $INSUNITS from the file (mm when unset).
     Auto,
