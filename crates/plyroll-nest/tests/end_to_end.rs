@@ -473,3 +473,111 @@ fn a_cosmetic_ply_inside_a_twill_ply_keeps_its_weave() {
     }
     assert_eq!(in_holes(&plies, &layout).len(), 2);
 }
+
+fn ply(name: &str, outer: Path, holes: Vec<Path>, qty: u32) -> PlyShape {
+    PlyShape {
+        shape: shape(name, outer, holes),
+        ref_deg: 0.0,
+        ref_origin: RefOrigin::DrawingX,
+        cosmetic: false,
+        variants: vec![Variant { angle_deg: 0.0, qty, kit: None, split: None }],
+    }
+}
+
+fn square(w: f64, x0: f64, ccw: bool) -> Path {
+    let mut p = vec![Pt::new(x0, x0), Pt::new(x0 + w, x0), Pt::new(x0 + w, x0 + w), Pt::new(x0, x0 + w)];
+    if !ccw {
+        p.reverse();
+    }
+    Path::from_points(&p, true)
+}
+
+/// Every copy is in exactly one unit, as a host or inside one.
+fn assert_each_copy_once(groups: &[plyroll_nest::ItemGroup], units: &[plyroll_nest::Unit]) {
+    let mut count = vec![0u32; groups.len()];
+    for u in units {
+        count[u.group] += u.demand;
+        for i in &u.inner {
+            count[i.group] += u.demand;
+        }
+    }
+    assert_eq!(count, groups.iter().map(|g| g.demand()).collect::<Vec<_>>());
+}
+
+#[test]
+fn several_small_plies_beat_one_large_one_in_a_hole() {
+    // The disc is the largest ply that fits the 300 mm hole, but four squares fill it better.
+    let m = material(MaterialKind::Ud, false);
+    let plies = vec![
+        ply("frame", square(360.0, 0.0, true), vec![square(300.0, 30.0, false)], 2),
+        ply("disc", circle(0.0, 0.0, 140.0, true), vec![], 2),
+        ply("square", square(145.0, 0.0, true), vec![], 8),
+    ];
+    let groups = build_groups(&plies, &m).unwrap();
+    let units = plyroll_nest::build_units(&plies, &m, &groups);
+    assert_each_copy_once(&groups, &units);
+    let frames: Vec<_> = units.iter().filter(|u| u.group == 0).collect();
+    assert!(frames.iter().all(|u| u.inner.len() == 4 && u.inner.iter().all(|i| i.group == 2)), "{units:#?}");
+    let layout = nest(&plies, &m, &opts(), |_| {}, Arc::new(AtomicBool::new(false))).expect("nest");
+    let r = verify(&plies, &layout);
+    assert!(r.ok, "{:?}", r.issues);
+    assert_eq!(in_holes(&plies, &layout).len(), 8);
+}
+
+#[test]
+fn plies_go_inside_plies_inside_holes() {
+    // A disc in a ring in a frame.
+    let m = material(MaterialKind::Ud, false);
+    let plies = vec![
+        ply("frame", square(360.0, 0.0, true), vec![square(300.0, 30.0, false)], 1),
+        ply("ring", circle(0.0, 0.0, 110.0, true), vec![circle(0.0, 0.0, 80.0, false)], 1),
+        ply("disc", circle(0.0, 0.0, 33.0, true), vec![], 4),
+    ];
+    let groups = build_groups(&plies, &m).unwrap();
+    let units = plyroll_nest::build_units(&plies, &m, &groups);
+    assert_each_copy_once(&groups, &units);
+    let layout = nest(&plies, &m, &opts(), |_| {}, Arc::new(AtomicBool::new(false))).expect("nest");
+    let r = verify(&plies, &layout);
+    assert!(r.ok, "{:?}", r.issues);
+    let inside = in_holes(&plies, &layout);
+    let name = |i: usize| plies[layout.placements[i].shape_idx].shape.name.as_str();
+    // The ring's hole is filled first: three discs there, the fourth beside the ring.
+    assert_eq!(inside.iter().filter(|&&(h, i)| name(h) == "ring" && name(i) == "disc").count(), 3, "{inside:?}");
+    assert!(inside.iter().any(|&(h, i)| name(h) == "frame" && name(i) == "ring"));
+    assert_eq!(inside.iter().filter(|&&(h, i)| name(h) == "frame" && name(i) == "disc").count(), 4, "{inside:?}");
+}
+
+#[test]
+fn plies_inside_plies_follow_turned_hosts() {
+    // The frame is cut at 90°, the box inside it at 0° and the tabs in the box's off-centre hole at 90°.
+    let m = material(MaterialKind::Ud, false);
+    let rect = |x0: f64, y0: f64, x1: f64, y1: f64, ccw: bool| {
+        let mut p = vec![Pt::new(x0, y0), Pt::new(x1, y0), Pt::new(x1, y1), Pt::new(x0, y1)];
+        if !ccw {
+            p.reverse();
+        }
+        Path::from_points(&p, true)
+    };
+    let mut plies = vec![
+        ply("frame", square(360.0, 0.0, true), vec![square(300.0, 30.0, false)], 1),
+        ply("box", rect(0.0, 0.0, 200.0, 150.0, true), vec![rect(20.0, 20.0, 130.0, 110.0, false)], 1),
+        ply("tab", rect(0.0, 0.0, 80.0, 30.0, true), vec![], 2),
+    ];
+    plies[0].variants[0].angle_deg = 90.0;
+    plies[2].variants[0].angle_deg = 90.0;
+    let groups = build_groups(&plies, &m).unwrap();
+    let units = plyroll_nest::build_units(&plies, &m, &groups);
+    assert_each_copy_once(&groups, &units);
+    assert_eq!(units.len(), 1, "everything goes in the frame: {units:#?}");
+    let layout = nest(&plies, &m, &opts(), |_| {}, Arc::new(AtomicBool::new(false))).expect("nest");
+    let r = verify(&plies, &layout);
+    assert!(r.ok, "{:?}", r.issues);
+    for pl in &layout.placements {
+        let ply = &plies[pl.shape_idx];
+        assert!(fibre_ok(ply.fibre_deg(&ply.variants[pl.variant_idx]), pl.rotation_deg, &m, ply.cosmetic));
+    }
+    let inside = in_holes(&plies, &layout);
+    let name = |i: usize| plies[layout.placements[i].shape_idx].shape.name.as_str();
+    assert_eq!(inside.iter().filter(|&&(h, i)| name(h) == "box" && name(i) == "tab").count(), 2, "{inside:?}");
+    assert!(inside.iter().any(|&(h, i)| name(h) == "frame" && name(i) == "box"));
+}

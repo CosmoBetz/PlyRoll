@@ -90,8 +90,8 @@ Nesting:
    when the nest needs more length than the roll has, already while it runs. **Manage rolls…** keeps the inventory:
    id, material, batch, length left, use-by date and a note, in `rolls.toml` next to the material library.
 3. **Nest.** The roll view shows the best layout so far, with fibre hatching per ply (zoom in) and the used length.
-   Before solving, holes are filled: each copy of a ply with a hole gets the largest other plies that fit inside it,
-   with the spacing kept and their fibres along the roll, and they travel with it.
+   Before solving, holes are filled with other plies, with the spacing kept and their fibres along the roll. A ply
+   that goes in a hole gets its own holes filled too, and everything inside travels with its host.
    **Stop and keep best** ends early and keeps a complete, verified layout.
 4. The result is saved with the project. Changing plies, quantities, sets, material or layout marks it *out of date*
    (picking a roll or template paper does not).
@@ -257,8 +257,8 @@ are ignored.
   only in the app (the CLI always nests everything). There is no warm start either.
 - Templates are of the whole layout; there are no single-ply templates.
 - Split lines run across the whole ply: no stepped or staggered splices, and no splice marks on the pieces.
-- Filling holes is a simple pass before the solver: largest ply first, on a grid, one level deep (a ply inside a hole
-  gets nothing inside its own holes). Moving a ply by hand leaves the plies in its holes where they are.
+- Filling holes is a quick pass before the solver: plies are placed one after another on a grid, and a few orders are
+  tried. It can miss tight fits that a person would find. Moving a ply by hand leaves the plies in its holes where they are.
 - DXF table headers have no handles (a quirk of the `dxf` crate writer). ezdxf and PlyRoll read the files fine.
   Check that your cutter software does too.
 
