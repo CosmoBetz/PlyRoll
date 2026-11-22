@@ -90,13 +90,13 @@ Status: revised 2026-11-22. **Phase 1 (CLI) is built. Phase 2 has the orientatio
 
 PlyRoll takes the flat ply patterns exported from CAD, arranges them on a prepreg roll using as little material as possible, and writes cut files that a cutter (or a person with a knife and templates) can use. It runs on your own machine, needs no account, and is open source.
 
-It replaces Nest & Cut for one use: **cutting carbon-fibre prepreg plies from rolls**. It does not try to cover everything Nest & Cut does. Most of Nest & Cut's CAM features are for thermal cutting of sheet metal (laser, plasma, oxy-fuel) and do not apply to prepreg (see §4).
+It is an alternative to commercial nesting software such as Nest & Cut for one use: **cutting carbon-fibre prepreg plies from rolls**. It does not try to cover everything Nest & Cut does. Most of Nest & Cut's CAM features are for thermal cutting of sheet metal (laser, plasma, oxy-fuel) and do not apply to prepreg (see §4).
 
 ### Success criteria
-- On 3–5 of your real jobs, material use (roll length used) is within about 2% of Nest & Cut or better.
+- On 3–5 real jobs, material use (roll length used) is within about 2% of a commercial nester (Nest & Cut) or better.
 - A typical job (20–300 plies) nests in 30–120 s on a laptop.
 - No ply is ever placed with the wrong fibre orientation. This is a hard rule, not something the optimizer trades off.
-- Output loads on your cutter, or prints as 1:1 templates, without manual fixing.
+- Output loads in the cutting shop's software, or prints as 1:1 templates, without manual fixing.
 
 ---
 
@@ -126,15 +126,15 @@ Generic fixes found along the way (for example, DXF import bugs) go upstream as 
 
 ---
 
-## 3. Step 0: check the engine on your real parts first (1–2 evenings, before any code)
+## 3. Step 0: check the engine on real parts first (1–2 evenings, before any code)
 
-1. Export 3–5 recent jobs from Nest & Cut **while you still have the subscription**: the input DXFs, the settings (roll width, spacing, rotations), and the resulting layouts with utilization and length.
+1. Export 3–5 recent jobs from the nesting software in use (here Nest & Cut): the input DXFs, the settings (roll width, spacing, rotations), and the resulting layouts with utilization and length.
 2. Load the same plies into [sparrowstudio.app](https://sparrowstudio.app/) with the same width and clearance.
    - Each angle variant must be **pre-rotated in CAD** so its fibre direction lies along drawing X. A shape needed at 0/+45/−45 becomes three files.
    - Allow only 0/180° turns. Do not use quarter-turns: they turn the fibres by 90°. Check which per-part rotation options studio actually offers.
 3. Compare the roll length used.
 
-If sparrow gets close to Nest & Cut, the plan below holds. If it is clearly worse on your shapes, investigate before building (time limits, item sorting, or a different backend). These exported jobs also become the project's permanent benchmark set.
+If sparrow gets close to Nest & Cut, the plan below holds. If it is clearly worse on these shapes, investigate before building (time limits, item sorting, or a different backend). These exported jobs also become the project's permanent benchmark set. Real part drawings that belong to an employer or customer stay out of the public repository; only parts that may be shared, or synthetic ones, go in `bench/`.
 
 ---
 
@@ -158,7 +158,7 @@ Source: [Nest & Cut feature page](https://nestandcut.com/nesting-software-featur
 | Optimized cut sequence | Useful for knife travel | Adapt for knife cutting (§5.6) |
 | NC post-processors (Amada, Bystronic…) | Need *knife cutter / plotter* formats instead | Adapt: DXF, HPGL/PLT, G-code, configurable templates |
 | DXF / PDF output | **Essential** | Keep, and add a ply-kit report |
-| Limits: 300 s optimization, 10 000 parts, 90-day data retention | — | No limits, and your data stays on disk |
+| Limits: 300 s optimization, 10 000 parts, 90-day data retention | — | No limits, and the data stays on disk |
 
 ---
 
@@ -168,7 +168,7 @@ Priorities: **P0** = minimum viable product (MVP), **P1** = needed for daily sho
 
 ### 5.1 Fibre orientation (the core prepreg feature) — P0
 
-Your situation:
+Starting point:
 - The CAD export does **not** carry a correct fibre direction, so each ply shape needs its 0° direction set by hand. This must be quick.
 - The same shape is often needed at several angles (for example 0°, +45° and −45°).
 - Plies are **never flipped**, because many prepregs are impregnated on one side only.
@@ -294,7 +294,7 @@ Output layers or channels: `CUT`, `MARK` (pen/inkjet: ply ID and fibre arrow), `
   - for drag knives: blade offset compensation
 - **Formats:**
   - P0: DXF (R12/2000, polylines in order), SVG, PDF.
-  - P1: HPGL/PLT (used by many plotters and knife tables), and G-code through **post-processor templates**. A machine profile is a TOML file plus a text template, so you can add your machine without changing code.
+  - P1: HPGL/PLT (used by many plotters and knife tables), and G-code through **post-processor templates**. A machine profile is a TOML file plus a text template, so a machine can be added without changing code.
   - P2: vendor-specific formats (Zünd, Gerber, Lectra, Eastman…), only for machines someone actually needs.
 - **Hand-cutting support (P1):** 1:1 PDF templates tiled to A4/A3 or plotter roll width, with alignment marks.
 - **Projector mode (P2):** a full-screen, calibrated 1:1 projection of the layout onto the cutting table for manual cutting.
@@ -400,7 +400,7 @@ Confirmed from the jagua-rs 1.0 release notes and the sparrow README:
 - **One global minimum separation per instance.** This is fine because one job = one material = one spacing.
 - **sparrow does strip packing only.** It has no bin packing, and jagua-rs 1.0 removed multi-strip support. Remnant sheets (bin packing) need our own optimizer on top of jagua-rs, or a sequential workaround.
 - **Strip packing places end to end**, which makes the kit-grouped mode easy.
-- **Endless roll = plain strip packing.** Your conveyor cutter takes the roll as one continuous strip, which is exactly sparrow's model. No frame splitting is needed.
+- **Endless roll = plain strip packing.** A conveyor cutter takes the roll as one continuous strip, which is exactly sparrow's model. No frame splitting is needed.
 - **No reflections needed.** Flipping is never allowed, so we never pass `reflection_axes`. Whether sparrow searches reflections no longer matters.
 - **Version coupling.** sparrow 0.3.0 pins jagua-rs 1.0.0, but jagua-rs 2.0.0 is already out. Any direct use of jagua-rs (for example live collision checks in the editor) must use the same version as sparrow.
 
@@ -417,10 +417,10 @@ Confirmed from the jagua-rs 1.0 release notes and the sparrow README:
 
 | Phase | Scope | Done when |
 |---|---|---|
-| **0. Check the engine** | §3: compare sparrow studio with Nest & Cut on your jobs | Comparison recorded; benchmark set saved in `bench/` |
+| **0. Check the engine** | §3: compare sparrow studio with Nest & Cut on real jobs | Comparison recorded; benchmark set saved in `bench/` |
 | **1. CLI MVP** | Rust workspace; DXF import + cleanup; ply shape / variant model; allowed rotations from 0° ref + angle + material; sparrow adapter; verifier; DXF/SVG/PDF export with labels. 0° refs and variants come from a small CSV (`file, ref_deg, angles×qty`) until the GUI exists. | `plyroll nest job.csv --material T700-UD-300 --out job.dxf` produces a verified, cuttable layout for a real job |
-| **2. Desktop app** | Tauri UI, **orientation editor first** (thumbnail grid, click-edge-for-0°, fibre hatching, variant table); then material library, live nesting view, project save/load, reports | You prepare and run a real production job without touching CSV |
-| **3. Shop features** | Manual editing + locking, kit-grouped mode, cut sequencing, HPGL / G-code templates for *your* cutter, 1:1 tiled templates, roll inventory | You cancel the Nest & Cut subscription |
+| **2. Desktop app** | Tauri UI, **orientation editor first** (thumbnail grid, click-edge-for-0°, fibre hatching, variant table); then material library, live nesting view, project save/load, reports | A real production job is prepared and run without touching CSV |
+| **3. Shop features** | Manual editing + locking, kit-grouped mode, cut sequencing, HPGL / G-code templates for the cutter, 1:1 tiled templates, roll inventory | Daily prepreg nesting works without a commercial nester |
 | **4. Extras** | Remnants (bin packing), defect zones, inside-hole nesting, splitting large plies, projector mode, more cutter formats | As needed |
 
 ### Testing
@@ -431,25 +431,25 @@ Confirmed from the jagua-rs 1.0 release notes and the sparrow README:
   - +45 ≡ −45 for interchangeable twill.
   - A mirrored outline never matches its original.
   - The verifier catches a hand-made wrong placement.
-- **Golden corpus:** real DXFs from your CAD, including bad ones (gaps, overlaps, splines, blocks), with expected cleanup results.
+- **Golden corpus:** real CAD exports that may be shared (or synthetic stand-ins), including bad ones (gaps, overlaps, splines, blocks), with expected cleanup results.
 - **Solution invariants:** on every benchmark run, `plyroll-verify` must pass (no overlap, inside width, fibre correct).
 - **Benchmark regression:** utilization and length on the saved jobs, tracked in CI with fixed seeds.
 - **Output check:** exported DXF/HPGL re-imported and compared to the solution; one dry run on the cutter (pen instead of knife) per new post-processor.
 
 ### Licensing
-- PlyRoll: **MIT or Apache-2.0** (compatible with sparrow, MIT, and jagua-rs, MPL-2.0).
+- PlyRoll: **MIT** (compatible with sparrow, MIT, and jagua-rs, MPL-2.0).
   - MPL-2.0 is file-level copyleft. Changes made *to jagua-rs files* must be shared; our own code is unaffected.
 - Avoid GPL dependencies (for example LibreDWG) unless the project itself is GPL. DWG support goes through the external ODA converter instead.
 
 ---
 
 ## 9. Open questions (defaults assumed until answered)
-Answered: endless roll (conveyor); 0° set by hand per ply shape; no flipping; several angle variants per shape; UD and twill.
+Answered: endless roll (conveyor); 0° set by hand per ply shape; no flipping; several angle variants per shape; UD and twill; the cutting shop makes NC code from the DXF with its own software, so cutter formats wait (§5.6).
 
 Still open:
-1. **Which cutter (make/model) and what file format does it accept?** DXF, HPGL/PLT, a vendor format? *Default: DXF + HPGL output first.*
+1. **Which cutter (make/model), if a direct cutter format is ever needed?** *Default: DXF only; the shop's software makes the NC code.*
 2. **Which face is up on the cutter, and which face does the CAD flat pattern show?** With one-sided prepreg, this decides whether a drawing must be mirrored once on import, and what "+45" means. Which CAD tool exports the plies? *Default: the drawing shows the face that is up on the cutter; +angles are counter-clockwise in that view.*
-3. **Twill:** may warp and weft be swapped (90° turns) for structural plies? Do you have cosmetic outer plies where the twill direction must match? *Default: no 90° turns, unless you switch it on per material.*
+3. **Twill:** may warp and weft be swapped (90° turns) for structural plies? Are there cosmetic outer plies where the twill direction must match? *Default: no 90° turns, unless it is switched on per material.*
 4. **Is there a usual datum for 0°** (a straight edge, the drawing X axis, a marked line)? *If it is mostly "drawing X" or "longest edge", the bulk buttons cover most shapes in one click.*
 5. **Typical job size and roll widths?** Number of plies, number of different shapes, roll width (1000 / 1250 / 1270 mm?). *Default: 20–300 plies, 1000 mm wide.*
 6. **Rolls only, or also remnant sheets?** *Default: rolls only until Phase 4.*

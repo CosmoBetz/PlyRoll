@@ -8,6 +8,12 @@ default-members = ["crates/plyroll-core", "crates/plyroll-nest", "crates/plyroll
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+authors = ["CosmoBetz"]
+repository = "https://github.com/CosmoBetz/PlyRoll"
+keywords = ["nesting", "composites", "prepreg", "cnc", "dxf"]
+categories = ["science", "command-line-utilities"]
+# sparrow is a git dependency, so these crates cannot go on crates.io.
+publish = false
 
 [workspace.dependencies]
 anyhow = "1"

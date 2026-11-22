@@ -3,6 +3,12 @@ name = "plyroll-nest"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "PlyRoll adapter for the sparrow strip-packing solver"
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
 
 [dependencies]
 plyroll-core = { path = "../plyroll-core" }

@@ -3,6 +3,12 @@ name = "plyroll-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Plies, fibre rules, DXF import and export, verification and reports for PlyRoll"
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true

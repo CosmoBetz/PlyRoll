@@ -3,6 +3,12 @@ name = "plyroll-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Command-line tool that nests prepreg plies on a roll"
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
 
 [[bin]]
 name = "plyroll"
