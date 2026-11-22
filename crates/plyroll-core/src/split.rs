@@ -80,9 +80,13 @@ impl Split {
     }
 
     /// The same split, with hand-placed lines turned back into automatic ones.
+    /// The piece count is kept, so a split of a ply that fits the roll (made to
+    /// nest it better) does not disappear.
     pub fn relaxed(&self) -> Split {
         match self {
-            Split::Manual { overlap, .. } => Split::Auto { overlap: *overlap, pieces: None },
+            Split::Manual { overlap, lines } => {
+                Split::Auto { overlap: *overlap, pieces: (!lines.is_empty()).then(|| lines.len().min(MAX_LINES) as u32 + 1) }
+            }
             s => s.clone(),
         }
     }

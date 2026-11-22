@@ -35,6 +35,9 @@ use plyroll_core::verify::placed_outlines;
 
 pub use plyroll_core;
 
+mod holes;
+pub use holes::{Inner, Unit, build_units, plain_units};
+
 #[derive(Clone, Debug)]
 pub struct NestOptions {
     /// Total optimisation time (80% explore, 20% compress).
@@ -146,6 +149,7 @@ struct Listener<'a, F: FnMut(&Progress)> {
     plies: &'a [PlyShape],
     material: &'a Material,
     groups: &'a [ItemGroup],
+    units: &'a [Unit],
     live: Option<Duration>,
     last_live: Option<std::time::Instant>,
     start: std::time::Instant,
@@ -164,7 +168,7 @@ impl<F: FnMut(&Progress)> SolutionListener for Listener<'_, F> {
         let layout = match self.live {
             Some(every) if phase != "final" && self.last_live.is_none_or(|t| now - t >= every) => {
                 self.last_live = Some(now);
-                map_solution(self.plies, self.material, self.groups, solution).ok()
+                map_solution(self.plies, self.material, self.groups, self.units, solution).ok()
             }
             _ => None,
         };
@@ -191,12 +195,13 @@ impl Terminator for CancelTerminator {
 
 /// Builds the solver instance (also useful for debugging: serialise it to JSON
 /// and run the sparrow CLI on it).
-pub fn build_instance(plies: &[PlyShape], material: &Material, groups: &[ItemGroup], nest_tol: f64) -> ExtSPInstance {
+pub fn build_instance(plies: &[PlyShape], material: &Material, groups: &[ItemGroup], units: &[Unit], nest_tol: f64) -> ExtSPInstance {
     let s = material.spacing;
-    let items = groups
+    let items = units
         .iter()
         .enumerate()
-        .map(|(id, g)| {
+        .map(|(id, u)| {
+            let g = &groups[u.group];
             let outer = &plies[g.shape_idx].shape.outer;
             let poly: Vec<(f32, f32)> =
                 outer.flatten(nest_tol, FlattenMode::Enclosing).iter().map(|p| ((p.x - g.center.x) as f32, (p.y - g.center.y) as f32)).collect();
@@ -204,13 +209,13 @@ pub fn build_instance(plies: &[PlyShape], material: &Material, groups: &[ItemGro
                 base: BaseItem {
                     id: id as u64,
                     orientation: ExtOrientation {
-                        rotation: ExtRotation::Discrete { angles: g.rotations.iter().map(|&r| r as f32).collect() },
+                        rotation: ExtRotation::Discrete { angles: u.rotations.iter().map(|&r| r as f32).collect() },
                         reflection_axes: vec![], // flipping is never allowed
                     },
                     shape: ExtShape::SimplePolygon(ExtSPolygon(poly)),
                     min_quality: None,
                 },
-                demand: g.demand() as u64,
+                demand: u.demand as u64,
             }
         })
         .collect();
@@ -233,7 +238,8 @@ fn fits_across(shape: &jagua_rs::geometry::primitives::SPolygon, rotations: &[f6
 pub fn nest(plies: &[PlyShape], material: &Material, opts: &NestOptions, mut on_progress: impl FnMut(&Progress), cancel: Arc<AtomicBool>) -> Result<Layout> {
     plyroll_core::job::validate_material(material)?;
     let groups = build_groups(plies, material)?;
-    let ext = build_instance(plies, material, &groups, opts.nest_tol);
+    let units = build_units(plies, material, &groups);
+    let ext = build_instance(plies, material, &groups, &units, opts.nest_tol);
 
     let mut config = DEFAULT_SPARROW_CONFIG;
     config.expl_cfg.time_limit = opts.time.mul_f32(0.8);
@@ -250,7 +256,7 @@ pub fn nest(plies: &[PlyShape], material: &Material, opts: &NestOptions, mut on_
     // across the roll (split pieces often do) may then no longer fit, and the
     // solver fails to place it. Nest exact shapes then.
     let room = ext.strip_height - ext.min_item_separation;
-    if !instance.items.iter().all(|(item, _)| fits_across(item.shape_cd(), &groups[item.external_id() as usize].rotations, room)) {
+    if !instance.items.iter().all(|(item, _)| fits_across(item.shape_cd(), &units[item.external_id() as usize].rotations, room)) {
         let exact = Importer::new(config.cde_config, None, config.narrow_concavity_cutoff_ratio);
         instance = jagua_rs::probs::spp::io::import_instance(&exact, &ext)?;
     }
@@ -261,13 +267,14 @@ pub fn nest(plies: &[PlyShape], material: &Material, opts: &NestOptions, mut on_
         plies,
         material,
         groups: &groups,
+        units: &units,
         live: opts.live_layout,
         last_live: None,
         start: std::time::Instant::now(),
     };
     let mut term = CancelTerminator { timeout: None, cancel };
     let solution = sparrow::optimizer::optimize(instance, rng, &mut listener, &mut term, &config.expl_cfg, &config.cmpr_cfg, None)?;
-    map_solution(plies, material, &groups, &solution)
+    map_solution(plies, material, &groups, &units, &solution)
 }
 
 /// Nests a job the way its grouping asks: all plies mixed, or kit by kit with
@@ -410,18 +417,19 @@ pub fn nest_after_locked(
 }
 
 /// Maps a solver solution back to ply placements in roll coordinates.
-fn map_solution(plies: &[PlyShape], material: &Material, groups: &[ItemGroup], solution: &SPSolution) -> Result<Layout> {
+fn map_solution(plies: &[PlyShape], material: &Material, groups: &[ItemGroup], units: &[Unit], solution: &SPSolution) -> Result<Layout> {
     let out = jagua_rs::probs::spp::io::export(solution, *sparrow::EPOCH);
     let s = material.spacing;
     let (dx, dy) = (material.lead_trim - s, material.edge_trim - s);
     let mut per_group: Vec<Vec<(f64, f64, f64)>> = vec![vec![]; groups.len()];
     for pi in &out.layout.placed_items {
-        let g = groups.get(pi.item_id as usize).ok_or_else(|| anyhow!("solver returned unknown item {}", pi.item_id))?;
+        let u = units.get(pi.item_id as usize).ok_or_else(|| anyhow!("solver returned unknown item {}", pi.item_id))?;
+        let g = &groups[u.group];
         ensure!(!pi.transformation.reflected, "solver returned a mirrored placement; refusing (flipping is not allowed)");
         let raw = pi.transformation.rotation as f64;
         let (tx, ty) = (pi.transformation.translation.0 as f64, pi.transformation.translation.1 as f64);
         // Snap to the exact allowed angle, keeping the part's centre where the solver put it.
-        let snapped = g
+        let snapped = u
             .rotations
             .iter()
             .copied()
@@ -430,7 +438,14 @@ fn map_solution(plies: &[PlyShape], material: &Material, groups: &[ItemGroup], s
             .ok_or_else(|| anyhow!("solver rotation {raw:.4}° is not one of the allowed angles"))?;
         // Solver map: p' = R(raw)(p - c) + t. Centre c maps to t. Keep that, use R(snapped).
         let rc = Affine::rot_trans(snapped, 0.0, 0.0).apply(g.center);
-        per_group[pi.item_id as usize].push((snapped, tx - rc.x + dx, ty - rc.y + dy));
+        let (hx, hy) = (tx - rc.x + dx, ty - rc.y + dy);
+        per_group[u.group].push((snapped, hx, hy));
+        // Plies in its holes follow the host.
+        let host = Affine::rot_trans(snapped, hx, hy);
+        for i in &u.inner {
+            let t = host.apply(Pt::new(i.tx, i.ty));
+            per_group[i.group].push((snapped + i.rotation, t.x, t.y));
+        }
     }
     let mut placements = Vec::new();
     for (gi, g) in groups.iter().enumerate() {
@@ -452,7 +467,7 @@ fn map_solution(plies: &[PlyShape], material: &Material, groups: &[ItemGroup], s
     Ok(layout)
 }
 
-fn ang_dist(a: f64, b: f64) -> f64 {
+pub(crate) fn ang_dist(a: f64, b: f64) -> f64 {
     let d = (a - b).rem_euclid(360.0);
     d.min(360.0 - d)
 }

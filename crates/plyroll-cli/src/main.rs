@@ -285,7 +285,8 @@ fn run() -> Result<i32> {
             };
             if dump_instance {
                 let groups = plyroll_nest::build_groups(&plies, &material)?;
-                let inst = plyroll_nest::build_instance(&plies, &material, &groups, opts.nest_tol);
+                let units = plyroll_nest::build_units(&plies, &material, &groups);
+                let inst = plyroll_nest::build_instance(&plies, &material, &groups, &units, opts.nest_tol);
                 let p = job.out.join("solver_instance.json");
                 std::fs::write(&p, serde_json::to_string_pretty(&inst)?)?;
                 println!("wrote {}", p.display());

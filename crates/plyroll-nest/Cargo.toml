@@ -17,3 +17,4 @@ log.workspace = true
 jagua-rs.workspace = true
 sparrow.workspace = true
 rand.workspace = true
+geo.workspace = true

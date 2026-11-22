@@ -370,3 +370,106 @@ fn ply_that_only_just_fits_still_nests() {
     assert!(r.ok, "{:?}", r.issues);
     assert_eq!(layout.placements.len(), 8);
 }
+
+/// Placements whose centre lies inside a hole of another placement.
+fn in_holes(plies: &[PlyShape], layout: &plyroll_core::model::Layout) -> Vec<(usize, usize)> {
+    let mut out = vec![];
+    for (h, host) in layout.placements.iter().enumerate() {
+        for hole in &plies[host.shape_idx].shape.holes {
+            let poly = hole.transformed(&host.transform(), 0.05).flatten(0.05, plyroll_core::geom::FlattenMode::Inscribed);
+            for (i, pl) in layout.placements.iter().enumerate() {
+                let b = plyroll_core::geom::BBox::of(&plies[pl.shape_idx].shape.outer.transformed(&pl.transform(), 0.05).flatten(0.05, plyroll_core::geom::FlattenMode::Inscribed));
+                let c = Pt::new((b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0);
+                if i != h && plyroll_core::geom::point_in_polygon(c, &poly) {
+                    out.push((h, i));
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn plies_go_inside_holes() {
+    let m = material(MaterialKind::Ud, false);
+    // A ring with a 300 mm hole, and plies that fit in it.
+    let plies = vec![
+        PlyShape {
+            shape: shape("ring", circle(0.0, 0.0, 190.0, true), vec![circle(0.0, 0.0, 150.0, false)]),
+            ref_deg: 0.0,
+            ref_origin: RefOrigin::DrawingX,
+            cosmetic: false,
+            variants: vec![Variant { angle_deg: 0.0, qty: 2, kit: None, split: None }, Variant { angle_deg: 45.0, qty: 1, kit: None, split: None }],
+        },
+        PlyShape {
+            shape: shape("tab", rounded_rect(120.0, 60.0, 8.0, 0.0, 0.0), vec![]),
+            ref_deg: 0.0,
+            ref_origin: RefOrigin::DrawingX,
+            cosmetic: false,
+            variants: vec![Variant { angle_deg: 0.0, qty: 6, kit: None, split: None }, Variant { angle_deg: 90.0, qty: 4, kit: None, split: None }],
+        },
+        PlyShape {
+            shape: shape("disc", circle(0.0, 0.0, 30.0, true), vec![]),
+            ref_deg: 0.0,
+            ref_origin: RefOrigin::DrawingX,
+            cosmetic: false,
+            variants: vec![Variant { angle_deg: 0.0, qty: 8, kit: None, split: None }],
+        },
+    ];
+    let groups = build_groups(&plies, &m).unwrap();
+    let units = plyroll_nest::build_units(&plies, &m, &groups);
+    // Every copy is in exactly one unit.
+    let mut count = vec![0u32; groups.len()];
+    for u in &units {
+        count[u.group] += u.demand;
+        for i in &u.inner {
+            count[i.group] += u.demand;
+        }
+    }
+    assert_eq!(count, groups.iter().map(|g| g.demand()).collect::<Vec<_>>());
+    assert!(units.iter().any(|u| u.inner.len() >= 2), "{units:#?}");
+    let layout = nest(&plies, &m, &opts(), |_| {}, Arc::new(AtomicBool::new(false))).expect("nest");
+    let r = verify(&plies, &layout);
+    assert!(r.ok, "{:?}", r.issues);
+    assert_eq!(layout.placements.len(), 21);
+    let inside = in_holes(&plies, &layout);
+    assert!(inside.len() >= 6, "{inside:?}");
+    assert!(inside.iter().all(|&(h, _)| plies[layout.placements[h].shape_idx].shape.name == "ring"));
+}
+
+#[test]
+fn a_cosmetic_ply_inside_a_twill_ply_keeps_its_weave() {
+    // Warp and weft may swap on the frame, not on the cosmetic patch inside it.
+    let m = material(MaterialKind::Twill, true);
+    let frame = Path::from_points(&[Pt::new(0.0, 0.0), Pt::new(300.0, 0.0), Pt::new(300.0, 300.0), Pt::new(0.0, 300.0)], true);
+    let hole = Path::from_points(&[Pt::new(40.0, 40.0), Pt::new(40.0, 260.0), Pt::new(260.0, 260.0), Pt::new(260.0, 40.0)], true);
+    let plies = vec![
+        PlyShape {
+            shape: shape("frame", frame, vec![hole]),
+            ref_deg: 0.0,
+            ref_origin: RefOrigin::DrawingX,
+            cosmetic: false,
+            variants: vec![Variant { angle_deg: 0.0, qty: 2, kit: None, split: None }],
+        },
+        PlyShape {
+            shape: shape("patch", rounded_rect(150.0, 90.0, 10.0, 0.0, 0.0), vec![]),
+            ref_deg: 0.0,
+            ref_origin: RefOrigin::DrawingX,
+            cosmetic: true,
+            variants: vec![Variant { angle_deg: 0.0, qty: 2, kit: None, split: None }],
+        },
+    ];
+    let groups = build_groups(&plies, &m).unwrap();
+    assert_eq!(groups[0].rotations.len(), 4);
+    let units = plyroll_nest::build_units(&plies, &m, &groups);
+    let host = units.iter().find(|u| !u.inner.is_empty()).expect("the patch goes in the frame");
+    assert_eq!(host.rotations.len(), 2, "only the turns that keep the patch's warp");
+    let layout = nest(&plies, &m, &opts(), |_| {}, Arc::new(AtomicBool::new(false))).expect("nest");
+    let r = verify(&plies, &layout);
+    assert!(r.ok, "{:?}", r.issues);
+    for pl in &layout.placements {
+        let ply = &plies[pl.shape_idx];
+        assert!(fibre_ok(ply.fibre_deg(&ply.variants[pl.variant_idx]), pl.rotation_deg, &m, ply.cosmetic));
+    }
+    assert_eq!(in_holes(&plies, &layout).len(), 2);
+}

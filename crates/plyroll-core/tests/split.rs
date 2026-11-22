@@ -384,3 +384,33 @@ fn split_json_from_the_app() {
     // And back: what the app reads in Variant.split.
     assert_eq!(serde_json::to_string(&auto).unwrap(), r#"{"mode":"auto","overlap":0.0}"#);
 }
+
+fn ring(r_out: f64, r_in: f64) -> Shape {
+    let q = plyroll_core::geom::bulge_from_sweep(std::f64::consts::PI);
+    let circle = |r: f64, ccw: bool| {
+        let c = Path::new(vec![Vtx { p: Pt::new(r, 0.0), bulge: q }, Vtx { p: Pt::new(-r, 0.0), bulge: q }], true);
+        if ccw { c } else { c.reversed() }
+    };
+    shape("ring", circle(r_out, true), vec![circle(r_in, false)])
+}
+
+#[test]
+fn a_ply_that_fits_can_still_be_split() {
+    // A ring that fits the 580 mm roll, split in two so the halves nest better.
+    let m = ud();
+    let ply = PlyShape {
+        shape: ring(250.0, 200.0),
+        ref_deg: 0.0,
+        ref_origin: RefOrigin::DrawingX,
+        cosmetic: false,
+        variants: vec![Variant { angle_deg: 0.0, qty: 1, kit: None, split: Some(Split::Auto { overlap: 0.0, pieces: Some(2) }) }],
+    };
+    assert!(split::fits(&ply.shape.outer, 0.0, &m, false));
+    let (plies, _) = split::expand(std::slice::from_ref(&ply), &[1], &m).unwrap();
+    assert_eq!(plies.len(), 2);
+    assert!(plies.iter().all(|p| p.shape.holes.is_empty()), "the cuts open the ring");
+    check_pieces(&ply.shape, &plies.iter().map(|p| p.shape.clone()).collect::<Vec<_>>(), 0.0);
+    // Hand-placed cuts keep their piece count when they go back to automatic.
+    let manual = Split::Manual { lines: vec![CutLine { p: Pt::new(0.0, 0.0), dir_deg: 0.0 }], overlap: 3.0 };
+    assert_eq!(manual.relaxed(), Split::Auto { overlap: 3.0, pieces: Some(2) });
+}

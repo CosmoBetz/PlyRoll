@@ -53,9 +53,31 @@ function segSeg(a: XY, b: XY, c: XY, d: XY): number {
   return Math.min(segPoint(a, c, d), segPoint(b, c, d), segPoint(c, a, b), segPoint(d, a, b));
 }
 
-/** Smallest distance between two outlines, stopping early once it is below `limit` (0 when they overlap). */
-export function gap(a: XY[], ab: Box, b: XY[], bb: Box, limit: number): number {
-  if (insidePoly(a[0], b) || insidePoly(b[0], a)) return 0;
+/** A placement's holes on the roll, moved by (dx, dy). */
+export function placedHoles(shapes: LayoutShapes, pl: Placement, dx = 0, dy = 0): XY[][] {
+  const t = (pl.rotation * Math.PI) / 180;
+  const c = Math.cos(t), s = Math.sin(t);
+  return shapes.shapes[pl.shape].holes.map((h) => h.map(([x, y]) => [x * c - y * s + pl.tx + dx, x * s + y * c + pl.ty + dy] as XY));
+}
+
+/**
+ * Smallest distance between two parts, stopping early once it is below `limit`
+ * (0 when they overlap). A part inside the other's hole is measured to that hole.
+ */
+export function gap(a: XY[], ab: Box, b: XY[], bb: Box, limit: number, aHoles: XY[][] = [], bHoles: XY[][] = []): number {
+  if (insidePoly(b[0], a)) {
+    const h = aHoles.find((h) => insidePoly(b[0], h));
+    return h ? edgeGap(b, bb, h, boxOf(h), limit) : 0;
+  }
+  if (insidePoly(a[0], b)) {
+    const h = bHoles.find((h) => insidePoly(a[0], h));
+    return h ? edgeGap(a, ab, h, boxOf(h), limit) : 0;
+  }
+  return edgeGap(a, ab, b, bb, limit);
+}
+
+/** Smallest distance between the edges of two outlines. */
+function edgeGap(a: XY[], ab: Box, b: XY[], bb: Box, limit: number): number {
   // Only edges near the other outline's box can be close to it.
   const edges = (p: XY[], other: Box) => {
     const out: [XY, XY][] = [];
@@ -94,6 +116,7 @@ export function clashes(shapes: LayoutShapes, placements: Placement[], moved: nu
   const set = new Set(moved ?? placements.map((_, i) => i));
   const pts = placements.map((pl, i) => placedOutline(shapes, pl, set.has(i) ? dx : 0, set.has(i) ? dy : 0));
   const boxes = pts.map(boxOf);
+  const holes = placements.map((pl, i) => placedHoles(shapes, pl, set.has(i) ? dx : 0, set.has(i) ? dy : 0));
   const bad = new Set<number>();
   const issues: string[] = [];
   const name = (i: number) => `${placements[i].label} copy ${placements[i].copy}`;
@@ -106,7 +129,7 @@ export function clashes(shapes: LayoutShapes, placements: Placement[], moved: nu
     }
     for (let j = 0; j < placements.length; j++) {
       if (j === i || (set.has(j) && j < i) || !near(b, boxes[j], m.spacing)) continue;
-      const d = gap(pts[i], b, pts[j], boxes[j], m.spacing);
+      const d = gap(pts[i], b, pts[j], boxes[j], m.spacing, holes[i], holes[j]);
       if (d < need) {
         bad.add(i);
         bad.add(j);

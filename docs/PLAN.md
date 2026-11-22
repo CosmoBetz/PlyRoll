@@ -1,6 +1,6 @@
 # PlyRoll — plan for a free, local 2D nesting tool for prepreg plies
 
-Status: revised 2026-11-22. **Phase 1 (CLI) is built. Phase 2 has the orientation editor, material library, job settings, live nesting, saved results, cut-file export, reports and import settings. Phase 3 has kit-by-kit nesting, roll inventory, 1:1 tiled templates, hand editing of a nest and splitting plies that are wider than the roll. Cutter formats (HPGL, G-code, cut sequencing) are deferred: the cutting shop's own software makes the NC code from the DXF.** See the README for usage.
+Status: revised 2026-11-22. **Phase 1 (CLI) is built. Phase 2 has the orientation editor, material library, job settings, live nesting, saved results, cut-file export, reports and import settings. Phase 3 has kit-by-kit nesting, roll inventory, 1:1 tiled templates, hand editing of a nest, splitting plies that are wider than the roll and filling holes with other plies. Cutter formats (HPGL, G-code, cut sequencing) are deferred: the cutting shop's own software makes the NC code from the DXF.** See the README for usage.
 
 **Phase 3, editing a nest by hand (§5.5):**
 - **Edits:** `edit::Edit` is move (one or more plies, roll mm), rotate (one ply, about its bounding-box centre, only to a rotation `allowed_rotations` gives, so the fibre check cannot fail through an edit), and lock/unlock. Locked plies refuse moves and turns. `NestResult::edit` applies an edit, refits the used length (far end of the last ply) and the kit sections' ends, and verifies the whole layout again. A refused edit changes nothing.
@@ -21,6 +21,13 @@ Status: revised 2026-11-22. **Phase 1 (CLI) is built. Phase 2 has the orientatio
 - **App:** a Roll column in the angle table (width across, red when too wide), a split view per angle (Auto, piece count, drag to move, ends to tilt, add/delete lines, overlap), *too wide* badges, and **Split N too wide** for all of them. **CLI:** `--auto-split`.
 - **Not done:** stepped or staggered splices, splice marks on the pieces, keeping the pieces of one ply next to each other on the roll.
 - **Checked:** core tests (cuts of the demo shapes at many lines and angles with the area kept, arcs, lines along edges and through corners and holes, U-shapes, marks, auto fit at several angles, even pieces when more are asked for, expand naming, unchanged serialization without a split, validation, save and reload, manual cuts following their ply under angle changes, mirroring and removal). Solver tests: split plies nest and verify; the demo rib auto-split on a 230 mm roll, which failed before the exact-outline fallback. Browser preview: the split view, auto, drag, tilt, add, nudge, delete, more pieces, no split, Split N too wide, nesting the pieces. CLI: the demo job and project on a 250 mm roll with `--auto-split`, verified, pieces in labels.csv, plies.csv and the report's checklist. Desktop app (demo on a 250 mm roll): the Roll column and badges, Auto (56 / 230 mm on the rib at +45°), dragging and tilting a cut, 3 pieces with 10 mm overlap, Split 5 too wide, a 30 s nest of 59 plies that verified with the pieces labelled on the roll, save, and `plyroll export` of the saved nest.
+
+**Phase 3, plies inside holes (§5.9):**
+- **Why not the solver:** jagua-rs refuses items with holes ("item has unsupported holes") and its strip has no holes either, so the solver cannot place a ply inside another.
+- **How:** `plyroll_nest::build_units` runs before the solver. Hosts are taken largest hole first; for each copy, each hole gets the largest remaining ply that fits (exact fibre turns only), again until nothing fits. A spot is the lowest, then leftmost, point on a 48-step grid where the ply is inside the hole and at least the spacing plus 0.05 mm from its edge and the plies already there (search outlines at 0.3 mm, enclosing for plies and inscribed for holes). What failed once in a hole is not tried again. Copies of one host reuse the same contents while there are plies for them. The host and its contents are one solver item with the host's outline and only the turns that keep every ply's fibre valid (a cosmetic ply inside a swappable twill host removes the 90° turns). `map_solution` places the contents from the snapped host transform, before copies are numbered.
+- **Verify:** parts are compared with their holes (geo measures a part inside a hole to that hole), so a ply in a hole passes and one across its edge, on the host's material or too close fails, naming both. The app's live hint (`collide.ts`) does the same.
+- **Not done:** contents inside contents; filling the gaps between plies; moving a host by hand does not move its contents.
+- **Checked:** verify tests (inside, too close, across the edge, on the material); solver tests (a ring with tabs and discs: every copy in exactly one unit, at least 6 plies inside, verified; a cosmetic patch in a swappable twill frame: 2 turns left, fibres valid); a ring that fits split into two open halves. An O-ring job (4 rings of 540 mm with the demo's small plies): 20 plies inside the rings, verified, 2245 mm in the app. The pass takes 15 ms (160 ms in a debug build).
 
 **Phase 3, roll inventory (§5.3):**
 - **Storage:** `rolls.toml` (`[[roll]]`: id, material name, batch, `remaining_m`, optional `expires` YYYY-MM-DD and note, `[[roll.usage]]` bookings), next to the material library in the app, `--rolls` (default next to the job) in the CLI. Same rules as the library: validated on load and save, written through a temporary file, never overwritten when it failed to load. `Material` is unchanged.
@@ -159,7 +166,7 @@ Source: [Nest & Cut feature page](https://nestandcut.com/nesting-software-featur
 | Layers mapped to cut / mark / info | **Essential** (mark = ply ID and fibre arrow) | Keep, plus an optional *fibre-direction* layer |
 | Per-part and global allowed rotations | **Essential**, but driven by fibre angle | Adapt: derived from 0° reference + angle variants + material (§5.1) |
 | Flipping (mirroring) | Not allowed (one-side-impregnated prepreg) | Drop. The verifier rejects mirrored placements. |
-| Inside-part nesting (small parts in holes) | Rare (plies seldom have big holes) | Later |
+| Inside-part nesting (small parts in holes) | Rare (plies seldom have big holes) | Done (simple pass) |
 | Multiple sheets of different sizes and shapes | Rolls first; remnant sheets later | Rolls in MVP, remnants later |
 | Multiplicity (repeat a few layouts) | Useful for production runs of N identical layups | Later |
 | Standard parts gallery | Low value (plies come from CAD) | Rectangles/strips only |
@@ -322,7 +329,7 @@ Output layers or channels: `CUT`, `MARK` (pen/inkjet: ply ID and fibre arrow), `
 
 ### 5.9 Advanced — P2 (only if needed)
 - Plies too wide for the roll: suggest splitting lines with overlap or butt-splice and mark them.
-- Inside-hole nesting (a second pass that uses big holes in placed parts as extra containers).
+- Inside-hole nesting: done as a pass before the solver (see Phase 3).
 - Common-line cutting (shared edges cut once).
 - Multiple roll widths: try each width and pick the cheapest.
 - Prepreg out-time and shelf-life tracking per roll batch.
@@ -406,7 +413,7 @@ Solution  { placements[{shape, variant, instance, rotation, x, y}], used_length,
 ## 7. Known limits of the engine (design around them, verify early)
 
 Confirmed from the jagua-rs 1.0 release notes and the sparrow README:
-- **Items with holes are rejected.** We nest the outer outline; holes stay in the cut output.
+- **Items with holes are rejected.** We nest the outer outline; holes stay in the cut output, and plies placed in them beforehand travel with their host.
 - **One global minimum separation per instance.** This is fine because one job = one material = one spacing.
 - **sparrow does strip packing only.** It has no bin packing, and jagua-rs 1.0 removed multi-strip support. Remnant sheets (bin packing) need our own optimizer on top of jagua-rs, or a sequential workaround.
 - **Strip packing places end to end**, which makes the kit-grouped mode easy.
@@ -431,7 +438,7 @@ Confirmed from the jagua-rs 1.0 release notes and the sparrow README:
 | **1. CLI MVP** | Rust workspace; DXF import + cleanup; ply shape / variant model; allowed rotations from 0° ref + angle + material; sparrow adapter; verifier; DXF/SVG/PDF export with labels. 0° refs and variants come from a small CSV (`file, ref_deg, angles×qty`) until the GUI exists. | `plyroll nest job.csv --material T700-UD-300 --out job.dxf` produces a verified, cuttable layout for a real job |
 | **2. Desktop app** | Tauri UI, **orientation editor first** (thumbnail grid, click-edge-for-0°, fibre hatching, variant table); then material library, live nesting view, project save/load, reports | A real production job is prepared and run without touching CSV |
 | **3. Shop features** | Manual editing + locking, kit-grouped mode, splitting plies wider than the roll, cut sequencing, HPGL / G-code templates for the cutter, 1:1 tiled templates, roll inventory | Daily prepreg nesting works without a commercial nester |
-| **4. Extras** | Remnants (bin packing), defect zones, inside-hole nesting, projector mode, more cutter formats | As needed |
+| **4. Extras** | Remnants (bin packing), defect zones, projector mode, more cutter formats | As needed |
 
 ### Testing
 - **Geometry unit and property tests:** loop chaining, orientation, offsets, transform round-trips.

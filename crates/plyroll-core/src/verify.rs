@@ -44,8 +44,15 @@ pub fn placed_outlines(plies: &[PlyShape], layout: &Layout, mode: FlattenMode) -
         .collect()
 }
 
-fn to_geo(pts: &[Pt]) -> Polygon<f64> {
-    Polygon::new(LineString::from(pts.iter().map(|p| Coord { x: p.x, y: p.y }).collect::<Vec<_>>()), vec![])
+fn ring(pts: &[Pt]) -> LineString<f64> {
+    LineString::from(pts.iter().map(|p| Coord { x: p.x, y: p.y }).collect::<Vec<_>>())
+}
+
+/// A placed part with its holes, so a part nested inside a hole is apart from it.
+/// Holes are inscribed (smaller than drawn), which keeps the gap check conservative.
+fn placed_polygon(plies: &[PlyShape], pl: &crate::model::Placement, outer: &[Pt]) -> Polygon<f64> {
+    let holes = plies[pl.shape_idx].shape.holes.iter().map(|h| ring(&h.transformed(&pl.transform(), CHECK_TOL).flatten(CHECK_TOL, FlattenMode::Inscribed))).collect();
+    Polygon::new(ring(outer), holes)
 }
 
 pub fn verify(plies: &[PlyShape], layout: &Layout) -> VerifyReport {
@@ -120,7 +127,7 @@ pub fn verify(plies: &[PlyShape], layout: &Layout) -> VerifyReport {
 
     // 5. Spacing between parts.
     let inscribed = placed_outlines(plies, layout, FlattenMode::Inscribed);
-    let geos: Vec<Polygon<f64>> = inscribed.iter().map(|o| to_geo(&o.poly)).collect();
+    let geos: Vec<Polygon<f64>> = layout.placements.iter().zip(&inscribed).map(|(pl, o)| placed_polygon(plies, pl, &o.poly)).collect();
     let mut order: Vec<usize> = (0..inscribed.len()).collect();
     order.sort_by(|&a, &b| inscribed[a].bbox.min.x.total_cmp(&inscribed[b].bbox.min.x));
     let mut min_gap: Option<f64> = None;
@@ -215,5 +222,34 @@ mod tests {
         assert!(r.issues.iter().any(|i| i.contains("fibres")), "{:?}", r.issues);
         // Wrong count.
         assert!(!verify(&plies, &layout(&[(0.0, 10.0, 5.0)])).ok);
+    }
+
+    #[test]
+    fn a_part_inside_a_hole_is_apart_from_it() {
+        // An 80 mm frame with a 50 mm hole (15..65), and a 20 mm square.
+        let mut frame = square_ply(80.0, 1, 0.0);
+        frame.shape.name = "frame".into();
+        frame.shape.holes = vec![Path::from_points(&[Pt::new(15.0, 15.0), Pt::new(15.0, 65.0), Pt::new(65.0, 65.0), Pt::new(65.0, 15.0)], true)];
+        let plies = vec![frame, square_ply(20.0, 1, 0.0)];
+        let lay = |x: f64, y: f64| Layout {
+            material: Material { roll_width: 100.0, ..material() },
+            placements: vec![
+                Placement { shape_idx: 0, variant_idx: 0, copy: 1, rotation_deg: 0.0, tx: 10.0, ty: 10.0 },
+                Placement { shape_idx: 1, variant_idx: 0, copy: 1, rotation_deg: 0.0, tx: x, ty: y },
+            ],
+            used_length: 100.0,
+            sections: vec![],
+        };
+        // Centred in the hole (25..75 on the roll): 15 mm from its edge.
+        let r = verify(&plies, &lay(40.0, 40.0));
+        assert!(r.ok, "{:?}", r.issues);
+        assert!((r.min_gap.unwrap() - 15.0).abs() < 1e-6);
+        // 1 mm from the hole's edge, across it, and on the frame's material.
+        for (x, y) in [(26.0, 40.0), (20.0, 40.0), (11.0, 40.0)] {
+            let r = verify(&plies, &lay(x, y));
+            assert!(!r.ok, "at {x}, {y}");
+            assert_eq!(r.bad, vec![0, 1], "at {x}, {y}: {:?}", r.issues);
+            assert!(r.issues[0].contains("frame") && r.issues[0].contains("sq"), "{:?}", r.issues);
+        }
     }
 }

@@ -72,6 +72,8 @@ How to use it:
    - **Overlap** makes each piece reach half of it past the cut.
    Each angle has its own cuts, since it lies differently on the roll. The pieces are nested as separate plies named
    `rib [1/2]`, `rib [2/2]`. Changing the 0°, mirroring or a changed outline puts manual cuts back to Auto.
+   Angles that fit can be split too (click the width, then **+** or **Add line**), for example a large ring whose
+   halves nest better than the whole.
 6. Switch to **Nest** (⌘2; ⌘1 goes back to the plies).
 
 Nesting:
@@ -88,6 +90,8 @@ Nesting:
    when the nest needs more length than the roll has, already while it runs. **Manage rolls…** keeps the inventory:
    id, material, batch, length left, use-by date and a note, in `rolls.toml` next to the material library.
 3. **Nest.** The roll view shows the best layout so far, with fibre hatching per ply (zoom in) and the used length.
+   Before solving, holes are filled: each copy of a ply with a hole gets the largest other plies that fit inside it,
+   with the spacing kept and their fibres along the roll, and they travel with it.
    **Stop and keep best** ends early and keeps a complete, verified layout.
 4. The result is saved with the project. Changing plies, quantities, sets, material or layout marks it *out of date*
    (picking a roll or template paper does not).
@@ -253,7 +257,8 @@ are ignored.
   only in the app (the CLI always nests everything). There is no warm start either.
 - Templates are of the whole layout; there are no single-ply templates.
 - Split lines run across the whole ply: no stepped or staggered splices, and no splice marks on the pieces.
-- Parts are not nested inside other parts' holes.
+- Filling holes is a simple pass before the solver: largest ply first, on a grid, one level deep (a ply inside a hole
+  gets nothing inside its own holes). Moving a ply by hand leaves the plies in its holes where they are.
 - DXF table headers have no handles (a quirk of the `dxf` crate writer). ezdxf and PlyRoll read the files fine.
   Check that your cutter software does too.
 
