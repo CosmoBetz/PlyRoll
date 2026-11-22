@@ -165,7 +165,7 @@ mod tests {
             ref_deg: 0.0,
             ref_origin: RefOrigin::DrawingX,
             cosmetic: false,
-            variants: vec![Variant { angle_deg: angle, qty, kit: None }],
+            variants: vec![Variant { angle_deg: angle, qty, kit: None, split: None }],
         }
     }
 

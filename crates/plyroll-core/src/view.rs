@@ -40,6 +40,36 @@ pub struct PlyView {
     pub holes: Vec<Vec<[f64; 2]>>,
     pub marks: Vec<MarkView>,
     pub edges: Vec<EdgeView>,
+    /// Per angle variant: width across the roll and the split, when a
+    /// material is chosen and the 0° is set.
+    pub fit: Vec<Option<VariantFit>>,
+}
+
+/// How one angle of a ply lies across the roll.
+#[derive(Clone, Debug, Serialize)]
+pub struct VariantFit {
+    /// Fibre direction in the drawing, degrees. Turning the drawing by minus
+    /// this puts the fibre along the roll.
+    pub fibre_deg: f64,
+    /// Width across the roll of the whole ply, mm.
+    pub width: f64,
+    pub usable: f64,
+    /// The whole ply fits.
+    pub fits: bool,
+    /// Cut lines in use (computed for an automatic split), drawing coordinates.
+    pub lines: Vec<crate::split::CutLine>,
+    /// Pieces of the split, top of the roll view first; empty when not split.
+    pub pieces: Vec<PieceView>,
+    /// Why the split cannot be made.
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PieceView {
+    pub width: f64,
+    pub fits: bool,
+    pub outline: Vec<[f64; 2]>,
+    pub holes: Vec<Vec<[f64; 2]>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -52,7 +82,37 @@ fn pts(p: &Path, tol: f64) -> Vec<[f64; 2]> {
     p.flatten(tol, FlattenMode::Inscribed).into_iter().map(|q| [q.x, q.y]).collect()
 }
 
-pub fn ply_view(p: &ProjectPly) -> PlyView {
+fn variant_fit(p: &ProjectPly, v: &Variant, material: &crate::model::Material, tol: f64) -> Option<VariantFit> {
+    let r = p.reference?;
+    let ply = crate::model::PlyShape { shape: p.shape.clone(), ref_deg: r.deg, ref_origin: r.origin, cosmetic: p.cosmetic, variants: vec![] };
+    let fibre_deg = ply.fibre_deg(v);
+    let width = crate::split::width_across(&p.shape.outer, fibre_deg, material, p.cosmetic);
+    let usable = material.usable_width();
+    let mut fit = VariantFit { fibre_deg, width, usable, fits: width <= usable + 1e-6, lines: vec![], pieces: vec![], error: None };
+    let Some(split) = &v.split else { return Some(fit) };
+    let made = crate::split::lines_for(&ply, v, split, material).and_then(|lines| {
+        let pieces = if lines.is_empty() { vec![] } else { crate::split::split_shape(&p.shape, &lines, split.overlap(), fibre_deg)? };
+        Ok((lines, pieces))
+    });
+    match made {
+        Ok((lines, pieces)) => {
+            fit.lines = lines;
+            if pieces.len() > 1 {
+                fit.pieces = pieces
+                    .iter()
+                    .map(|s| {
+                        let w = crate::split::width_across(&s.outer, fibre_deg, material, p.cosmetic);
+                        PieceView { width: w, fits: w <= usable + 1e-6, outline: pts(&s.outer, tol), holes: s.holes.iter().map(|h| pts(h, tol)).collect() }
+                    })
+                    .collect();
+            }
+        }
+        Err(e) => fit.error = Some(format!("{e:#}")),
+    }
+    Some(fit)
+}
+
+pub fn ply_view(p: &ProjectPly, material: Option<&crate::model::Material>) -> PlyView {
     let s = &p.shape;
     let outer_pts = s.outer.flatten(0.05, FlattenMode::Inscribed);
     let bb = BBox::of(&outer_pts);
@@ -90,11 +150,21 @@ pub fn ply_view(p: &ProjectPly) -> PlyView {
         holes: s.holes.iter().map(|h| pts(h, tol)).collect(),
         marks: s.marks.iter().map(|m| MarkView { pts: pts(m, tol), closed: m.closed }).collect(),
         edges,
+        fit: p.variants.iter().map(|v| material.and_then(|m| variant_fit(p, v, m, tol))).collect(),
     }
 }
 
 pub fn project_view(p: &Project) -> Vec<PlyView> {
-    p.plies.iter().map(ply_view).collect()
+    p.plies.iter().map(|x| ply_view(x, p.job.material.as_ref())).collect()
+}
+
+/// Angles that are wider than the roll and not split yet.
+pub fn too_wide_count(plies: &[PlyView]) -> usize {
+    plies
+        .iter()
+        .flat_map(|p| p.variants.iter().zip(&p.fit))
+        .filter(|(v, f)| v.qty > 0 && v.split.is_none() && f.as_ref().is_some_and(|f| !f.fits))
+        .count()
 }
 
 /// Outline of one solver ply, drawing coordinates.

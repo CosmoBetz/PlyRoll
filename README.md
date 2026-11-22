@@ -3,7 +3,7 @@
 Free, local nesting for carbon-fibre prepreg plies on an endless roll.
 Every ply keeps its fibre direction (UD) or warp direction (twill); plies are never flipped.
 
-Status: **Phase 1 command-line tool; Phase 2 desktop app with orientation editor, material library, nesting and reports; Phase 3 under way (kit-by-kit nesting, roll inventory, 1:1 printable templates, editing a nest by hand, re-nesting after locked plies).** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
+Status: **Phase 1 command-line tool; Phase 2 desktop app with orientation editor, material library, nesting and reports; Phase 3 under way (kit-by-kit nesting, roll inventory, 1:1 printable templates, editing a nest by hand, re-nesting after locked plies, splitting plies wider than the roll).** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
 Nesting is done by [sparrow](https://github.com/JeroenGar/sparrow) on top of
 [jagua-rs](https://github.com/JeroenGar/jagua-rs).
 
@@ -63,7 +63,16 @@ How to use it:
 4. Badges show *no 0°*, *check 0°* (outline changed in the DXF, or mirrored) and *0° set*.
    **N** jumps to the next ply that needs attention; **Enter** confirms.
    Select several plies (⌘/⇧-click) to apply a rule or angle list to all of them.
-5. Switch to **Nest** (⌘2; ⌘1 goes back to the plies).
+5. Split plies that are wider than the roll. Once a material is picked, the angle table has a **Roll** column with each
+   angle's width across the roll; angles that don't fit are red and marked *too wide*. **Split N too wide** splits all
+   of them at once. Click a cell to see an angle's cuts in the roll view:
+   - **Auto** puts the cuts along the fibre, as few pieces as fit, each at the narrowest part of the ply;
+     **− / +** changes the number of pieces;
+   - drag a cut line to move it, drag its ends to tilt it, **Add line** for another one; arrows nudge, Delete removes;
+   - **Overlap** makes each piece reach half of it past the cut.
+   Each angle has its own cuts, since it lies differently on the roll. The pieces are nested as separate plies named
+   `rib [1/2]`, `rib [2/2]`. Changing the 0°, mirroring or a changed outline puts manual cuts back to Auto.
+6. Switch to **Nest** (⌘2; ⌘1 goes back to the plies).
 
 Nesting:
 
@@ -112,7 +121,9 @@ Or nest the saved project from the command line. It uses the project's material,
 
 `plyroll export my-job.plyroll -o out/my-job` writes the files of the nest saved in the project without nesting again
 (refused if it is out of date). Both commands take `--templates a4|a3|letter|roll:<mm>` and `--roll <id>` (with
-`--rolls <file>`, default `rolls.toml` next to the job), and default to the project's choices.
+`--rolls <file>`, default `rolls.toml` next to the job), and default to the project's choices. Splits saved in the
+project are used; `--auto-split` also splits the angles that are still too wide (for a job CSV it is the only way to
+split).
 
 **Reload DXFs** re-reads every file. 0° references are kept, and parts whose outline changed are flagged for a check.
 **Import settings…** sets the units (from each file's `$INSUNITS`, or forced to mm / cm / m / inch for every file) and
@@ -241,6 +252,7 @@ are ignored.
   that needs fixed obstacles in the solver, which sparrow does not support yet. It works on Mixed layouts only, and
   only in the app (the CLI always nests everything). There is no warm start either.
 - Templates are of the whole layout; there are no single-ply templates.
+- Split lines run across the whole ply: no stepped or staggered splices, and no splice marks on the pieces.
 - Parts are not nested inside other parts' holes.
 - DXF table headers have no handles (a quirk of the `dxf` crate writer). ezdxf and PlyRoll read the files fine.
   Check that your cutter software does too.

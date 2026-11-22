@@ -9,6 +9,8 @@
     onpick,
     ontogglepoints,
     onvariants,
+    onsplit,
+    splitting = null,
     oncosmetic,
     onmirrored,
     onrename,
@@ -20,6 +22,10 @@
     onpick: (pick: RefPick) => void;
     ontogglepoints: () => void;
     onvariants: (vs: Variant[]) => void;
+    /** Opens the split view for angle `i` of the active ply. */
+    onsplit: (i: number) => void;
+    /** Angle whose split view is open. */
+    splitting?: number | null;
     oncosmetic: (on: boolean) => void;
     onmirrored: (on: boolean) => void;
     onrename: (name: string) => void;
@@ -35,6 +41,7 @@
   const variantsDiffer = $derived(multi && selected.some((p) => key(p.variants) !== key(active.variants)));
   const anyLayer = $derived(selected.some((p) => p.layer_ref_deg != null));
   const toConfirm = $derived(selected.filter((p) => p.status === "check").length);
+  const hasFit = $derived(active.fit.some((f) => f != null));
 
   function fmtSize(b: [number, number, number, number]): string {
     const f = (v: number) => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2));
@@ -173,7 +180,7 @@
       <p class="hint">No angles yet. Add the orientations this ply is cut at.</p>
     {:else}
       <table class="variants">
-        <thead><tr><th>Angle</th><th>Qty</th><th>Kit</th><th></th></tr></thead>
+        <thead><tr><th>Angle</th><th>Qty</th><th>Kit</th>{#if !multi && hasFit}<th title="Width across the roll; split angles that are too wide">Roll</th>{/if}<th></th></tr></thead>
         <tbody>
           {#each active.variants as v, i (i + ":" + v.angle_deg)}
             <tr>
@@ -183,6 +190,25 @@
               </td>
               <td><input value={v.qty} inputmode="numeric" onchange={(e) => setField(i, "qty", e.currentTarget.value)} aria-label="Quantity" /></td>
               <td><input value={v.kit ?? ""} placeholder="—" onchange={(e) => setField(i, "kit", e.currentTarget.value)} aria-label="Kit" /></td>
+              {#if !multi && hasFit}
+                {@const f = active.fit[i]}
+                <td class="fit">
+                  {#if f}
+                    {@const bad = !!f.error || f.pieces.some((p) => !p.fits) || (!v.split && !f.fits)}
+                    <button
+                      class="split"
+                      class:bad
+                      class:on={splitting === i}
+                      onclick={() => onsplit(i)}
+                      title={v.split
+                        ? `Split in ${Math.max(1, f.pieces.length)} piece${f.pieces.length === 1 ? "" : "s"} (${v.split.mode === "auto" ? "automatic" : "by hand"}). ${Math.round(f.width)} mm across, roll ${Math.round(f.usable)} mm usable.`
+                        : `${Math.round(f.width)} mm across, roll ${Math.round(f.usable)} mm usable${f.fits ? "" : ": too wide, split it"}`}
+                    >
+                      {#if v.split}✂ {Math.max(1, f.pieces.length)}{:else if !f.fits}Split{:else}{Math.round(f.width)}{/if}
+                    </button>
+                  {/if}
+                </td>
+              {/if}
               <td><button class="icon" title="Remove" onclick={() => update((vs) => vs.filter((_, j) => j !== i))}>×</button></td>
             </tr>
           {/each}
@@ -197,7 +223,10 @@
       <button onclick={() => addAngle(90)}>90°</button>
     </div>
     <div class="quick">
-      <button onclick={() => update(() => [0, 45, -45, 90].map((a) => ({ angle_deg: a, qty: isoQty, kit: active.variants[0]?.kit ?? null })))}>
+      <button
+        onclick={() =>
+          update((vs) => [0, 45, -45, 90].map((a) => ({ angle_deg: a, qty: isoQty, kit: active.variants[0]?.kit ?? null, split: vs.find((v) => v.angle_deg === a)?.split ?? null })))}
+      >
         Quasi-iso set
       </button>
       <label class="iso">× <input type="number" min="1" bind:value={isoQty} aria-label="Quasi-iso quantity per angle" /></label>
@@ -428,5 +457,25 @@
   .ghost {
     color: var(--bad);
     background: transparent;
+  }
+  td.fit {
+    text-align: right;
+  }
+  button.split {
+    min-width: 44px;
+    padding: 2px 6px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+  }
+  button.split.bad {
+    color: var(--bad);
+    border-color: var(--bad);
+    background: var(--bad-soft);
+  }
+  button.split.on {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--ink);
   }
 </style>

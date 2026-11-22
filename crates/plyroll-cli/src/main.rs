@@ -94,6 +94,10 @@ struct JobArgs {
     /// Output folder.
     #[arg(long, short, default_value = "out")]
     out: PathBuf,
+    /// Split plies that are wider than the roll into pieces, along the fibre,
+    /// at every angle that needs it. Splits saved in a project are kept.
+    #[arg(long)]
+    auto_split: bool,
     #[command(flatten)]
     import: ImportArgs,
 }
@@ -353,11 +357,20 @@ fn prepare(job: &JobArgs) -> Result<(Vec<PlyShape>, Material, Vec<String>)> {
     let chosen = job.material.as_deref().map(|n| library_material(job, n)).transpose()?;
     let (plies, material, warnings) = if is_project(&job.job) {
         // A project brings its own material and number of sets.
-        let proj = Project::load(&job.job)?;
+        let mut proj = Project::load(&job.job)?;
+        if job.auto_split {
+            let n = proj.auto_split(chosen.as_ref())?;
+            if n > 0 {
+                println!("split {n} angle{} wider than the roll", if n == 1 { "" } else { "s" });
+            }
+        }
         if chosen.is_none() && proj.job.material.is_none() {
             bail!("project {} has no material yet: pick one in the app, or pass -m <name>", job.job.display());
         }
-        let input = proj.nest_input(chosen.as_ref()).with_context(|| format!("project {}", job.job.display()))?;
+        let input = proj.nest_input(chosen.as_ref()).map_err(|e| {
+            let msg = format!("project {}: {e:#}", job.job.display());
+            if !job.auto_split && msg.contains("wider than the roll") { anyhow::anyhow!("{msg}\nor pass --auto-split") } else { anyhow::anyhow!(msg) }
+        })?;
         if proj.job.sets > 1 {
             println!("{} sets: every quantity is multiplied by {}", proj.job.sets, proj.job.sets);
         }
@@ -365,8 +378,20 @@ fn prepare(job: &JobArgs) -> Result<(Vec<PlyShape>, Material, Vec<String>)> {
     } else {
         let Some(material) = chosen else { bail!("--material is required for a job CSV") };
         let rows = read_job_csv(&job.job)?;
-        let loaded = load_job(&rows, &job.import.options())?;
-        (loaded.plies, material, loaded.warnings)
+        let mut loaded = load_job(&rows, &job.import.options())?;
+        if job.auto_split {
+            let n = plyroll_core::split::auto_split_plies(&mut loaded.plies, &material);
+            if n > 0 {
+                println!("split {n} angle{} wider than the roll", if n == 1 { "" } else { "s" });
+            }
+        }
+        let ids = vec![0; loaded.plies.len()];
+        let (plies, _) = plyroll_core::split::expand(&loaded.plies, &ids, &material)?;
+        let wide = plyroll_core::split::too_wide(&plies, &material);
+        if !wide.is_empty() {
+            bail!("wider than the roll ({:.0} mm usable); pass --auto-split to split them:\n  {}", material.usable_width(), wide.join("\n  "));
+        }
+        (plies, material, loaded.warnings)
     };
     for w in &warnings {
         eprintln!("warning: {w}");

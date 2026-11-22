@@ -165,9 +165,23 @@ impl ProjectPly {
     }
 
     fn set_reference(&mut self, deg: f64, origin: RefOrigin) {
-        self.reference = Some(Reference { deg: norm_axis(deg), origin });
+        let deg = norm_axis(deg);
+        if self.reference.is_some_and(|r| (r.deg - deg).abs() > 1e-9) {
+            self.relax_splits();
+        }
+        self.reference = Some(Reference { deg, origin });
         self.confirmed = true;
         self.note = None;
+    }
+
+    /// Hand-placed cut lines only hold for the outline and fibre direction
+    /// they were placed on; after a change they become automatic again.
+    fn relax_splits(&mut self) {
+        for v in &mut self.variants {
+            if let Some(s) = &v.split {
+                v.split = Some(s.relaxed());
+            }
+        }
     }
 }
 
@@ -402,9 +416,11 @@ impl Project {
                     {
                         // A uniform scale keeps every direction, so the 0° reference still holds.
                         ply.signature = sig;
+                        ply.relax_splits();
                         rep.rescaled += 1;
                     } else {
                         ply.signature = sig;
+                        ply.relax_splits();
                         if ply.reference.is_some() {
                             ply.confirmed = false;
                             ply.note = Some("outline changed in the DXF; check the 0° reference".into());
@@ -516,7 +532,7 @@ impl Project {
                 RefSpec::Layer => RefPick::Layer,
             };
             proj.set_reference(&ids, &pick).with_context(|| format!("job line {}", row.line))?;
-            let variants: Vec<Variant> = row.variants.iter().map(|&(angle_deg, qty)| Variant { angle_deg, qty, kit: row.kit.clone() }).collect();
+            let variants: Vec<Variant> = row.variants.iter().map(|&(angle_deg, qty)| Variant { angle_deg, qty, kit: row.kit.clone(), split: None }).collect();
             proj.set_variants(&ids, &variants)?;
             proj.set_cosmetic(&ids, row.cosmetic)?;
             if let Some(n) = &row.name {
@@ -595,16 +611,66 @@ impl Project {
         Ok(())
     }
 
+    /// Sets the angle list of plies. A hand-placed split is kept only on the
+    /// ply it was placed on and at the same angle; anywhere else it becomes
+    /// automatic (so a list applied to several plies never copies one ply's
+    /// cut lines onto another).
     pub fn set_variants(&mut self, ids: &[u64], variants: &[Variant]) -> Result<()> {
         for v in variants {
             if !v.angle_deg.is_finite() || v.angle_deg.abs() > 360.0 {
                 bail!("ply angle {} is not valid", v.angle_deg);
             }
+            if let Some(s) = &v.split {
+                s.validate()?;
+            }
         }
         for &id in ids {
-            self.ply_mut(id)?.variants = variants.to_vec();
+            let ply = self.ply_mut(id)?;
+            let mut next = variants.to_vec();
+            for v in &mut next {
+                if let Some(s @ crate::split::Split::Manual { .. }) = &v.split {
+                    let own = ply.variants.iter().any(|o| (o.angle_deg - v.angle_deg).abs() < 1e-9 && o.split.as_ref() == Some(s));
+                    if !own {
+                        v.split = Some(s.relaxed());
+                    }
+                }
+            }
+            ply.variants = next;
         }
         Ok(())
+    }
+
+    /// Sets (or with `None` removes) the split of one angle variant.
+    pub fn set_split(&mut self, id: u64, variant: usize, split: Option<crate::split::Split>) -> Result<()> {
+        if let Some(s) = &split {
+            s.validate()?;
+        }
+        let ply = self.ply_mut(id)?;
+        let name = ply.shape.name.clone();
+        let v = ply.variants.get_mut(variant).ok_or_else(|| anyhow!("{name} has no angle {variant}"))?;
+        v.split = split;
+        Ok(())
+    }
+
+    /// Gives every angle that is wider than the roll (and not split yet) an
+    /// automatic split. Plies without a confirmed 0° are skipped. Returns how
+    /// many angles were split.
+    pub fn auto_split(&mut self, material: Option<&Material>) -> Result<usize> {
+        let material = match material.or(self.job.material.as_ref()) {
+            Some(m) => m.clone(),
+            None => bail!("choose a material for this project first"),
+        };
+        let mut n = 0;
+        for p in &mut self.plies {
+            let (Some(r), true) = (p.reference, p.confirmed) else { continue };
+            for v in &mut p.variants {
+                if v.qty > 0 && v.split.is_none() && !crate::split::fits(&p.shape.outer, r.deg + v.angle_deg, &material, p.cosmetic) {
+                    v.split = Some(crate::split::Split::Auto { overlap: 0.0, pieces: None });
+                    n += 1;
+                }
+            }
+        }
+        Ok(n)
     }
 
     pub fn set_cosmetic(&mut self, ids: &[u64], on: bool) -> Result<()> {
@@ -624,6 +690,7 @@ impl Project {
             }
             ply.shape = mirror_shape(&ply.shape);
             ply.shape.mirrored_on_import = on;
+            ply.relax_splits();
             if let Some(r) = ply.reference {
                 ply.reference = Some(Reference { deg: norm_axis(-r.deg), origin: r.origin });
                 ply.confirmed = false;
@@ -704,6 +771,17 @@ impl Project {
                     v.qty *= sets;
                 }
             }
+        }
+        // Split angles become one ply per piece.
+        let (plies, ply_ids) = crate::split::expand(&plies, &ply_ids, &material)?;
+        let wide = crate::split::too_wide(&plies, &material);
+        if !wide.is_empty() {
+            bail!(
+                "wider than the roll ({:.0} mm usable); split {} in the Plies view:\n  {}",
+                material.usable_width(),
+                if wide.len() == 1 { "it" } else { "them" },
+                wide.join("\n  ")
+            );
         }
         let grouping = self.job.grouping;
         let fingerprint = fingerprint(&plies, &ply_ids, &material, grouping);

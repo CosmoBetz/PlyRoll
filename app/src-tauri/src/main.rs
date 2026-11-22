@@ -206,6 +206,8 @@ struct AppView {
     result: Option<ResultView>,
     /// Id of the nest that is running, if any.
     running: Option<u64>,
+    /// Angles wider than the roll that have no split yet.
+    too_wide: usize,
 }
 
 #[derive(Serialize)]
@@ -228,8 +230,10 @@ fn total(plies: &[plyroll_core::model::PlyShape]) -> u32 {
 }
 
 fn view(st: &AppState, window: &WebviewWindow) -> AppView {
+    let mut unsplit = 0;
     let ready = match st.project.to_plies() {
         Ok((plies, warnings)) => {
+            unsplit = total(&plies) * st.project.job.sets.max(1);
             let mut message = format!("{} plies from {} shapes ready to nest", total(&plies), plies.len());
             if !warnings.is_empty() {
                 message.push_str(&format!(" ({} without quantities left out)", warnings.len()));
@@ -239,9 +243,14 @@ fn view(st: &AppState, window: &WebviewWindow) -> AppView {
         Err(e) => Readiness { ok: false, message: format!("{e:#}") },
     };
     let nest_ready = match st.project.nest_input(None) {
-        Ok(input) => Readiness { ok: true, message: format!("{} plies on {}", total(&input.plies), input.material.name) },
+        Ok(input) => {
+            let n = total(&input.plies);
+            let before = if n != unsplit { format!(" ({unsplit} before splitting)") } else { String::new() };
+            Readiness { ok: true, message: format!("{n} plies on {}{before}", input.material.name) }
+        }
         Err(e) => Readiness { ok: false, message: format!("{e:#}") },
     };
+    let plies = project_view(&st.project);
     let file = st.path.as_ref().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().into_owned());
     let title = format!("{}{} — PlyRoll", if st.dirty { "• " } else { "" }, file.as_deref().unwrap_or("Untitled"));
     let _ = window.set_title(&title);
@@ -253,7 +262,8 @@ fn view(st: &AppState, window: &WebviewWindow) -> AppView {
         can_redo: !st.redo.is_empty(),
         can_undo_edit: !st.edit_undo.is_empty(),
         can_redo_edit: !st.edit_redo.is_empty(),
-        plies: project_view(&st.project),
+        too_wide: plyroll_core::view::too_wide_count(&plies),
+        plies,
         ready,
         job: st.project.job.clone(),
         import: st.project.import.clone(),
@@ -357,6 +367,19 @@ fn set_reference(ids: Vec<u64>, pick: RefPick, state: Shared, window: WebviewWin
 #[tauri::command]
 fn set_variants(ids: Vec<u64>, variants: Vec<Variant>, state: Shared, window: WebviewWindow) -> CmdResult<AppView> {
     edit(&state, &window, |p| p.set_variants(&ids, &variants))
+}
+
+#[tauri::command]
+fn set_split(id: u64, variant: usize, split: Option<plyroll_core::split::Split>, state: Shared, window: WebviewWindow) -> CmdResult<AppView> {
+    edit(&state, &window, |p| p.set_split(id, variant, split))
+}
+
+#[tauri::command]
+fn auto_split(state: Shared, window: WebviewWindow) -> CmdResult<AppView> {
+    edit(&state, &window, |p| match p.auto_split(None)? {
+        0 => anyhow::bail!("no angle is wider than the roll"),
+        _ => Ok(()),
+    })
 }
 
 #[tauri::command]
@@ -828,6 +851,8 @@ fn main() {
             import_sources,
             set_reference,
             set_variants,
+            set_split,
+            auto_split,
             set_cosmetic,
             set_mirrored,
             rename_ply,

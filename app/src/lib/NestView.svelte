@@ -14,6 +14,7 @@
     onmanage,
     onaddmaterial,
     onplies,
+    onautosplit,
     onmanagerolls,
     onbook,
     onunbook,
@@ -33,6 +34,8 @@
     onmanage: () => void;
     onaddmaterial: (m: Material) => void;
     onplies: () => void;
+    /** Splits every angle that is wider than the roll. */
+    onautosplit: () => void;
     onmanagerolls: () => void;
     onbook: () => void;
     onunbook: () => void;
@@ -306,6 +309,11 @@
       {#if !view.nest_ready.ok}
         <p class="blocked">{view.nest_ready.message}</p>
         {#if !view.ready.ok}<button class="link" onclick={onplies}>Go to the plies</button>{/if}
+        {#if view.too_wide > 0}
+          <button onclick={onautosplit} title="Cuts each one along the fibre into as few pieces as fit; check or move the cuts in the Plies view">
+            Split {view.too_wide} too-wide angle{view.too_wide === 1 ? "" : "s"} automatically
+          </button>
+        {/if}
       {:else}
         <p class="hint">{view.nest_ready.message}</p>
       {/if}

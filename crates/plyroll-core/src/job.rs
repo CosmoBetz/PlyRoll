@@ -177,7 +177,7 @@ pub fn load_job(rows: &[JobRow], base_opts: &ImportOptions) -> Result<LoadedJob>
                 shape.name = if multi { format!("{n}{}", shape.name.rsplit_once('#').map(|x| format!("#{}", x.1)).unwrap_or_default()) } else { n.clone() };
             }
             let (ref_deg, ref_origin) = resolve_ref(&row.ref_spec, &shape).with_context(|| format!("job line {}", row.line))?;
-            let variants = row.variants.iter().map(|&(angle_deg, qty)| Variant { angle_deg, qty, kit: row.kit.clone() }).collect();
+            let variants = row.variants.iter().map(|&(angle_deg, qty)| Variant { angle_deg, qty, kit: row.kit.clone(), split: None }).collect();
             plies.push(PlyShape { shape, ref_deg, ref_origin, cosmetic: row.cosmetic, variants });
         }
     }

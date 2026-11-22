@@ -2,7 +2,7 @@
 // implementation calls Rust commands; the mock lets the editor run in a
 // plain browser (npm run dev) with real demo data.
 
-import type { AppView, Edit, ImportReport, ImportSettings, JobSettings, LibraryView, Material, NestDone, NestProgress, NestStarted, RefPick, Roll, RollsView, SourceFile, Variant } from "./types";
+import type { AppView, Edit, ImportReport, ImportSettings, JobSettings, LibraryView, Material, NestDone, NestProgress, NestStarted, RefPick, Roll, RollsView, SourceFile, Split, Variant } from "./types";
 
 export interface Backend {
   readonly kind: "tauri" | "mock";
@@ -18,6 +18,10 @@ export interface Backend {
   importSources(): Promise<SourceFile[]>;
   setReference(ids: number[], pick: RefPick): Promise<AppView>;
   setVariants(ids: number[], variants: Variant[]): Promise<AppView>;
+  /** Sets (or with null removes) the split of one angle of a ply. */
+  setSplit(id: number, variant: number, split: Split | null): Promise<AppView>;
+  /** Splits every angle that is wider than the roll and not split yet. */
+  autoSplit(): Promise<AppView>;
   setCosmetic(ids: number[], on: boolean): Promise<AppView>;
   setMirrored(ids: number[], on: boolean): Promise<AppView>;
   rename(id: number, name: string): Promise<AppView>;

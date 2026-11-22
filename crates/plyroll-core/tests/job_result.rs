@@ -82,7 +82,7 @@ fn result_goes_stale_on_edits_and_survives_save() {
     let id = p.plies[0].id;
     let before = p.plies[0].variants.clone();
     let mut more = before.clone();
-    more.push(Variant { angle_deg: 90.0, qty: 1, kit: None });
+    more.push(Variant { angle_deg: 90.0, qty: 1, kit: None, split: None });
     p.set_variants(&[id], &more).unwrap();
     let f = p.freshness().unwrap();
     assert!(!f.fresh && f.reason.is_some());

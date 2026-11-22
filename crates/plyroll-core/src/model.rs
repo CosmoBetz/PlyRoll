@@ -50,6 +50,10 @@ pub struct Variant {
     pub angle_deg: f64,
     pub qty: u32,
     pub kit: Option<String>,
+    /// How this variant is cut into pieces when it is wider than the roll.
+    /// Absent when not split, so plies without a split hash as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split: Option<crate::split::Split>,
 }
 
 /// A shape with its 0° reference and the angles it must be cut at.

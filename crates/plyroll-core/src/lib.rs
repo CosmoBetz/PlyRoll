@@ -14,6 +14,7 @@ pub mod project;
 pub mod report;
 pub mod edit;
 pub mod rolls;
+pub mod split;
 pub mod template;
 pub mod verify;
 pub mod view;

@@ -8,6 +8,39 @@ export interface Variant {
   angle_deg: number;
   qty: number;
   kit: string | null;
+  /** How this angle is cut into pieces when it is wider than the roll; absent = not split. */
+  split?: Split | null;
+}
+
+/** An infinite cut line through `p` in direction `dir_deg`, drawing coordinates. */
+export interface CutLine {
+  p: { x: number; y: number };
+  dir_deg: number;
+}
+
+export type Split =
+  | { mode: "auto"; overlap: number; pieces?: number | null }
+  | { mode: "manual"; lines: CutLine[]; overlap: number };
+
+export interface PieceView {
+  width: number;
+  fits: boolean;
+  outline: XY[];
+  holes: XY[][];
+}
+
+/** How one angle of a ply lies across the roll (needs a material and a 0°). */
+export interface VariantFit {
+  /** Fibre direction in the drawing; turning by minus this puts it along the roll. */
+  fibre_deg: number;
+  width: number;
+  usable: number;
+  fits: boolean;
+  /** Cut lines in use, drawing coordinates (computed for an automatic split). */
+  lines: CutLine[];
+  /** Pieces, top of the roll view first; empty when not split. */
+  pieces: PieceView[];
+  error: string | null;
 }
 
 export interface Edge {
@@ -46,6 +79,8 @@ export interface Ply {
   holes: XY[][];
   marks: Mark[];
   edges: Edge[];
+  /** Per variant, null without a material or 0°. */
+  fit: (VariantFit | null)[];
 }
 
 export interface Readiness {
@@ -71,6 +106,8 @@ export interface AppView {
   result: ResultView | null;
   /** Id of the running nest. */
   running: number | null;
+  /** Angles wider than the roll with no split yet. */
+  too_wide: number;
 }
 
 export type MaterialKind = "ud" | "twill";

@@ -72,7 +72,7 @@ fn unset_reference_blocks_nesting_and_mirror_needs_recheck() {
     // Flange has a FIBRE line: prefilled and accepted.
     assert_eq!(proj.ply(flange).unwrap().status(), PlyStatus::Ok);
     assert_eq!(proj.ply(rib).unwrap().status(), PlyStatus::Unset);
-    let v = [plyroll_core::model::Variant { angle_deg: 45.0, qty: 1, kit: None }];
+    let v = [plyroll_core::model::Variant { angle_deg: 45.0, qty: 1, kit: None, split: None }];
     proj.set_variants(&[rib, flange], &v).unwrap();
     let err = proj.to_plies().unwrap_err().to_string();
     assert!(err.contains("rib"), "{err}");
@@ -109,7 +109,9 @@ fn changing_units_rescales_plies_and_keeps_confirmed_references() {
     use plyroll_core::import::UnitsOverride;
     use plyroll_core::project::ImportSettings;
     let (dir, mut proj) = demo_copy("units");
-    let material = plyroll_core::job::load_materials(&demo().join("materials.toml")).unwrap().remove(0);
+    let mut material = plyroll_core::job::load_materials(&demo().join("materials.toml")).unwrap().remove(0);
+    // Wide enough for the plies read as inches (25.4 times larger).
+    material.roll_width = 10_000.0;
     // A mirrored ply must also count as only rescaled.
     let skin = proj.plies.iter().find(|p| p.part == "skin").unwrap().id;
     proj.set_mirrored(&[skin], true).unwrap();

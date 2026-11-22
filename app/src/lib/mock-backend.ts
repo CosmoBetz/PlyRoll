@@ -6,6 +6,48 @@ import type { Backend } from "./backend";
 import type { AppView, Edit, ImportSettings, JobSettings, LayoutShapes, Material, NestDone, NestProgress, Placement, Ply, RefOrigin, RefPick, ResultView, Roll, RollsView } from "./types";
 import { longestEdge, normAxis, totalQty } from "./geo";
 import { boxOf, clashes, placedOutline } from "./collide";
+import { autoLines, cutPieces, widthAcross } from "./split";
+import type { Variant, VariantFit } from "./types";
+
+/** The mock's stand-in for the Rust fit and split (display outlines, UD rules only). */
+function fitFor(p: Ply, v: Variant, m: Material | null): VariantFit | null {
+  if (!m || p.ref_deg == null) return null;
+  const fibre = p.ref_deg + v.angle_deg;
+  const usable = m.roll_width - 2 * m.edge_trim;
+  const width = widthAcross(p.outline, fibre);
+  const fit: VariantFit = { fibre_deg: fibre, width, usable, fits: width <= usable + 1e-6, lines: [], pieces: [], error: null };
+  const s = v.split;
+  if (!s) return fit;
+  fit.lines = s.mode === "auto" ? autoLines(p.outline, p.holes, fibre, usable, s.overlap, s.pieces) : s.lines;
+  const pcs = fit.lines.length ? cutPieces(p.outline, p.holes, fit.lines, s.overlap) : [];
+  if (pcs.length > 1)
+    fit.pieces = pcs.map((pc) => {
+      const w = widthAcross(pc.outline, fibre);
+      return { ...pc, width: w, fits: w <= usable + 1e-6 };
+    }).sort((a, b) => {
+      const cy = (q: typeof a) => {
+        const ys = q.outline.map(([x, y]) => -x * Math.sin((fibre * Math.PI) / 180) + y * Math.cos((fibre * Math.PI) / 180));
+        return (Math.min(...ys) + Math.max(...ys)) / 2;
+      };
+      return cy(b) - cy(a);
+    });
+  return fit;
+}
+
+/** Split angles become one ply per piece, as the Rust nest input does. */
+function expandForNest(plies: Ply[], m: Material): Ply[] {
+  return plies.flatMap((p) => {
+    const keep = { ...p, variants: p.variants.filter((v) => !v.split) };
+    keep.total_qty = totalQty(keep.variants);
+    const extra = p.variants.flatMap((v) => {
+      if (!v.split) return [];
+      const f = fitFor(p, v, m);
+      if (!f || f.pieces.length < 2) return [{ ...p, variants: [{ ...v, split: null }], total_qty: v.qty }];
+      return f.pieces.map((pc, k) => ({ ...p, name: `${p.name} [${k + 1}/${f.pieces.length}]`, outline: pc.outline, holes: pc.holes, variants: [{ ...v, split: null }], total_qty: v.qty }));
+    });
+    return [...(keep.variants.length ? [keep] : []), ...extra];
+  });
+}
 import demo from "../mock/demo-view.json";
 
 // The demo material library (examples/demo/materials.toml).
@@ -13,6 +55,8 @@ const DEMO_MATERIALS: Material[] = [
   { name: "UD-T700-150", kind: "ud", roll_width: 600, edge_trim: 10, lead_trim: 20, spacing: 2, angle_tolerance: 0, tolerance_step: 0.5, warp_weft_interchangeable: false, cost_per_m2: 45 },
   { name: "Twill-200", kind: "twill", roll_width: 600, edge_trim: 10, lead_trim: 20, spacing: 2, angle_tolerance: 0, tolerance_step: 0.5, warp_weft_interchangeable: false, cost_per_m2: 38 },
   { name: "Twill-200-swap", kind: "twill", roll_width: 600, edge_trim: 10, lead_trim: 20, spacing: 2, angle_tolerance: 0, tolerance_step: 0.5, warp_weft_interchangeable: true, cost_per_m2: null },
+  // A narrow roll, so the demo plies need splitting.
+  { name: "UD-narrow-250", kind: "ud", roll_width: 250, edge_trim: 10, lead_trim: 20, spacing: 2, angle_tolerance: 0, tolerance_step: 0.5, warp_weft_interchangeable: false, cost_per_m2: 45 },
 ];
 
 // A small demo inventory.
@@ -92,11 +136,32 @@ export function createMockBackend(): Backend {
     const blocked = plies.filter((p) => p.total_qty > 0 && p.status !== "ok");
     return blocked.length ? "set the 0° reference before nesting:\n  " + blocked.map((p) => p.name).join("\n  ") : null;
   };
+  const withFit = (p: Ply): Ply => ({ ...p, fit: p.variants.map((v) => fitFor(p, v, job.material)) });
+  const wideMsg = () => {
+    if (!job.material) return null;
+    const usable = job.material.roll_width - 2 * job.material.edge_trim;
+    const wide: string[] = [];
+    for (const p of plies.map(withFit))
+      p.variants.forEach((v, i) => {
+        const f = p.fit[i];
+        if (!f || v.qty === 0) return;
+        if (f.pieces.length) f.pieces.forEach((pc, k) => !pc.fits && wide.push(`${p.name} [${k + 1}/${f.pieces.length}] ${v.angle_deg}° (${Math.round(pc.width)} mm)`));
+        else if (!f.fits) wide.push(`${p.name} ${v.angle_deg}° (${Math.round(f.width)} mm)`);
+      });
+    return wide.length ? `wider than the roll (${Math.round(usable)} mm usable); split ${wide.length === 1 ? "it" : "them"} in the Plies view:\n  ${wide.join("\n  ")}` : null;
+  };
+  const nestMsg = (unsplit: number, m: Material) => {
+    const n = expandForNest(plies, m).reduce((s, p) => s + p.total_qty, 0) * job.sets;
+    return `${n} plies on ${m.name}${n !== unsplit ? ` (${unsplit} before splitting)` : ""}`;
+  };
   const view = (): AppView => {
     const b = blockedMsg();
     const n = plies.reduce((s, p) => s + p.total_qty, 0);
     const ready = b ? { ok: false, message: b } : { ok: true, message: `${n} plies ready to nest` };
-    const nest_ready = b ? ready : job.material ? { ok: true, message: `${n * job.sets} plies on ${job.material.name}` } : { ok: false, message: "choose a material for this project first" };
+    const w = wideMsg();
+    const nest_ready = b ? ready : !job.material ? { ok: false, message: "choose a material for this project first" } : w ? { ok: false, message: w } : { ok: true, message: nestMsg(n * job.sets, job.material) };
+    const shown = plies.map(withFit);
+    const too_wide = shown.reduce((s, p) => s + p.variants.filter((v, i) => v.qty > 0 && !v.split && p.fit[i] && !p.fit[i]!.fits).length, 0);
     const fresh = result != null && result.key === inputKey();
     return {
       name: "demo (browser mock)",
@@ -106,7 +171,8 @@ export function createMockBackend(): Backend {
       can_redo: redo.length > 0,
       can_undo_edit: editUndo.length > 0,
       can_redo_edit: editRedo.length > 0,
-      plies: structuredClone(plies),
+      plies: structuredClone(shown),
+      too_wide,
       ready,
       job: structuredClone(job),
       import: structuredClone(importSettings),
@@ -237,6 +303,19 @@ export function createMockBackend(): Backend {
         p.variants = structuredClone(variants);
         p.total_qty = totalQty(variants);
       }),
+    setSplit: (id, i, split) =>
+      change([id], (p) => {
+        if (!p.variants[i]) throw new Error(`${p.name} has no angle ${i}`);
+        p.variants[i].split = split;
+      }),
+    autoSplit: () => {
+      if (!job.material) return Promise.reject("choose a material for this project first");
+      const ids = plies.filter((p) => p.status === "ok" && p.variants.some((v) => !v.split && v.qty > 0 && !fitFor(p, v, job.material)!.fits)).map((p) => p.id);
+      if (!ids.length) return Promise.reject("no angle is wider than the roll");
+      return change(ids, (p) => {
+        for (const v of p.variants) if (!v.split && v.qty > 0 && !fitFor(p, v, job.material)!.fits) v.split = { mode: "auto", overlap: 0, pieces: null };
+      });
+    },
     setCosmetic: (ids, on) => change(ids, (p) => void (p.cosmetic = on)),
     setMirrored: (ids, on) =>
       change(ids, (p) => {
@@ -377,7 +456,8 @@ export function createMockBackend(): Backend {
       const start = Date.now();
       const total = Math.min(job.time_s, 6) * 1000;
       let step = 0;
-      let best = around(fakeNest(plies, job, 0));
+      const nestPlies = expandForNest(plies, job.material);
+      let best = around(fakeNest(nestPlies, job, 0));
       const shapes = best.shapes;
       const finish = (stopped: boolean) => {
         clearInterval(timer);
@@ -413,7 +493,7 @@ export function createMockBackend(): Backend {
       };
       const timer = setInterval(() => {
         step++;
-        const next = around(fakeNest(plies, job, step));
+        const next = around(fakeNest(nestPlies, job, step));
         if (next.length < best.length) best = next;
         const elapsed = (Date.now() - start) / 1000;
         listeners.forEach((l) => l.progress({ run: id, phase: elapsed < (total / 1000) * 0.8 ? "explore" : "compress", length: best.length, density: 0.7, elapsed, placements: best.placements, sections: null, section: null }));

@@ -12,6 +12,9 @@
     return { x: x0 - pad, y: -y1 - pad, w: w + 2 * pad, h: h + 2 * pad, unit: Math.max(w, h) / 110 };
   });
   const STATUS_TEXT = { unset: "no 0°", check: "check 0°", ok: "0° set" };
+  // Angles wider than the roll (not split) and split angles.
+  const wide = $derived(ply.variants.filter((v, i) => v.qty > 0 && !v.split && ply.fit[i] && !ply.fit[i]!.fits).length);
+  const split = $derived(ply.variants.filter((v) => v.split).length);
 </script>
 
 <button class="thumb" class:selected class:active onclick={onselect} title="{ply.name} — {ply.file}{ply.note ? '\n' + ply.note : ''}">
@@ -36,6 +39,7 @@
   <span class="meta">
     <span class="badge {ply.status}">{STATUS_TEXT[ply.status]}</span>
     {#if ply.ref_deg != null}<span class="deg">{fmtAngle(ply.ref_deg)}</span>{/if}
+    {#if wide}<span class="wide" title="{wide} angle{wide === 1 ? ' is' : 's are'} wider than the roll">too wide</span>{:else if split}<span class="cut" title="{split} angle{split === 1 ? '' : 's'} split into pieces">✂</span>{/if}
     <span class="qty" class:zero={ply.total_qty === 0}>×{ply.total_qty}</span>
   </span>
 </button>
@@ -106,5 +110,12 @@
   }
   .qty.zero {
     color: var(--warn);
+  }
+  .wide {
+    color: var(--bad);
+    font-weight: 600;
+  }
+  .cut {
+    color: var(--accent);
   }
 </style>

@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { createBackend, type Backend } from "./lib/backend";
-  import type { AppView, Edit, ImportReport, ImportSettings, JobSettings, LibraryView, LiveNest, Material, NestDone, Ply, RefPick, Roll, RollsView, SourceFile, Variant } from "./lib/types";
+  import type { AppView, Edit, ImportReport, ImportSettings, JobSettings, LibraryView, LiveNest, Material, NestDone, Ply, RefPick, Roll, RollsView, SourceFile, Split, Variant } from "./lib/types";
   import { angleColor, pickLabel, variantLabel } from "./lib/geo";
   import Editor from "./lib/Editor.svelte";
   import Thumb from "./lib/Thumb.svelte";
   import Inspector from "./lib/Inspector.svelte";
   import NestView from "./lib/NestView.svelte";
+  import SplitView from "./lib/SplitView.svelte";
   import MaterialDialog from "./lib/MaterialDialog.svelte";
   import RollsDialog from "./lib/RollsDialog.svelte";
   import ImportDialog from "./lib/ImportDialog.svelte";
@@ -17,6 +18,8 @@
   let activeId = $state<number | null>(null);
   let pointsMode = $state(false);
   let preview = $state(0);
+  /** Angle of the active ply whose split view is open. */
+  let splitting = $state<number | null>(null);
   let filter = $state<"all" | "todo">("all");
   let autoAdvance = $state(false);
   let showHelp = $state(false);
@@ -110,6 +113,12 @@
   }
 
   const setVariants = (vs: Variant[]) => backend && run(() => backend!.setVariants(targetIds, vs));
+  const setSplit = (i: number, split: Split | null) => backend && active && run(() => backend!.setSplit(active!.id, i, split));
+  async function autoSplit() {
+    if (!backend || !view) return;
+    const before = view.too_wide;
+    await run(() => backend!.autoSplit(), `Split ${before} angle${before === 1 ? "" : "s"} wider than the roll. Check the cuts in the Plies view.`);
+  }
   const setCosmetic = (on: boolean) => backend && run(() => backend!.setCosmetic(targetIds, on));
   const setMirrored = (on: boolean) => backend && run(() => backend!.setMirrored(targetIds, on));
   const rename = (name: string) => backend && activeId != null && run(() => backend!.rename(activeId!, name));
@@ -361,7 +370,12 @@
     if (activeId != null && activeId !== previewFor) {
       previewFor = activeId;
       if (preview >= 0) preview = 0;
+      splitting = null;
     }
+  });
+  // Close the split view when its angle goes away or cannot be measured.
+  $effect(() => {
+    if (splitting != null && (!active || !active.fit[splitting] || mode !== "plies")) splitting = null;
   });
 
   function onkeydown(e: KeyboardEvent) {
@@ -390,7 +404,7 @@
       }
       return;
     }
-    if (typing || !active || mode !== "plies" || showMaterials || showImport || showRolls) {
+    if (typing || !active || mode !== "plies" || showMaterials || showImport || showRolls || splitting != null) {
       if (e.key === "Escape" && showHelp) showHelp = false;
       return;
     }
@@ -514,6 +528,11 @@
       {view?.name ?? ""}{#if view?.dirty}<span class="dirty" title="Unsaved changes">•</span>{/if}
       {#if backend?.kind === "mock"}<span class="mock">browser preview — nothing is saved</span>{/if}
     </div>
+    {#if view && view.too_wide > 0}
+      <button class="wide" onclick={autoSplit} title="These angles are wider than the roll. Cuts each one along the fibre into as few pieces as fit.">
+        Split {view.too_wide} too wide
+      </button>
+    {/if}
     {#if plies.length}
       <button class="ready" class:ok={view?.ready.ok} title={view?.ready.message} onclick={() => ((mode = "plies"), nextTodo())}>
         {#if view?.ready.ok}Ready to nest{:else if todo.length}{todo.length} of {plies.length} need 0°{:else}Not ready{/if}
@@ -545,6 +564,7 @@
       onmanage={() => (showMaterials = true)}
       onaddmaterial={(m) => saveMaterial(null, m)}
       onplies={() => (mode = "plies")}
+      onautosplit={autoSplit}
       {rolls}
       onmanagerolls={() => (showRolls = true)}
       onbook={bookRoll}
@@ -593,11 +613,15 @@
             </span>
             <span class="spacer"></span>
             {#if pointsMode}<span class="mode">Two-point mode · Esc to cancel</span>{/if}
-            <button onclick={() => editor?.fit()} title="Fit to view (V, or double-click)">Fit</button>
+            {#if splitting == null}<button onclick={() => editor?.fit()} title="Fit to view (V, or double-click)">Fit</button>{/if}
           </div>
           <div class="canvas">
-            <Editor bind:this={editor} ply={active} {pointsMode} {preview} onpick={pick} onpointsdone={() => (pointsMode = false)} />
-            {#if active.status === "unset" && !pointsMode}
+            {#if splitting != null && active.fit[splitting]}
+              <SplitView ply={active} vi={splitting} fit={active.fit[splitting]!} onsplit={(s) => setSplit(splitting!, s)} onclose={() => (splitting = null)} />
+            {:else}
+              <Editor bind:this={editor} ply={active} {pointsMode} {preview} onpick={pick} onpointsdone={() => (pointsMode = false)} />
+            {/if}
+            {#if active.status === "unset" && !pointsMode && splitting == null}
               <div class="banner">Click an edge that runs along <b>0°</b> · or press <kbd>X</kbd> <kbd>Y</kbd> <kbd>L</kbd> <kbd>B</kbd>{active.layer_ref_deg != null ? " F" : ""} · <kbd>P</kbd> for two points</div>
             {/if}
           </div>
@@ -612,6 +636,8 @@
           onpick={pick}
           ontogglepoints={() => (pointsMode = !pointsMode)}
           onvariants={setVariants}
+          onsplit={(i) => (splitting = splitting === i ? null : i)}
+          {splitting}
           oncosmetic={setCosmetic}
           onmirrored={setMirrored}
           onrename={rename}
@@ -995,5 +1021,10 @@
   .toast.error {
     background: var(--bad);
     color: white;
+  }
+  header button.wide {
+    border-color: var(--bad);
+    color: var(--bad);
+    background: var(--bad-soft);
   }
 </style>

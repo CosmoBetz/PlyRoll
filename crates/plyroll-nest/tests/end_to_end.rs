@@ -37,21 +37,21 @@ fn plies() -> Vec<PlyShape> {
             ref_deg: 0.0,
             ref_origin: RefOrigin::DrawingX,
             cosmetic: false,
-            variants: vec![Variant { angle_deg: 0.0, qty: 3, kit: None }, Variant { angle_deg: 45.0, qty: 2, kit: None }, Variant { angle_deg: -45.0, qty: 2, kit: None }],
+            variants: vec![Variant { angle_deg: 0.0, qty: 3, kit: None, split: None }, Variant { angle_deg: 45.0, qty: 2, kit: None, split: None }, Variant { angle_deg: -45.0, qty: 2, kit: None, split: None }],
         },
         PlyShape {
             shape: shape("plate", rounded_rect(140.0, 140.0, 10.0, 0.0, 0.0), vec![circle(70.0, 70.0, 25.0, false)]),
             ref_deg: 10.0,
             ref_origin: RefOrigin::Manual,
             cosmetic: false,
-            variants: vec![Variant { angle_deg: 0.0, qty: 2, kit: None }, Variant { angle_deg: 90.0, qty: 2, kit: None }],
+            variants: vec![Variant { angle_deg: 0.0, qty: 2, kit: None, split: None }, Variant { angle_deg: 90.0, qty: 2, kit: None, split: None }],
         },
         PlyShape {
             shape: shape("tri", tri, vec![]),
             ref_deg: 0.0,
             ref_origin: RefOrigin::DrawingX,
             cosmetic: false,
-            variants: vec![Variant { angle_deg: 30.0, qty: 3, kit: None }],
+            variants: vec![Variant { angle_deg: 30.0, qty: 3, kit: None, split: None }],
         },
     ]
 }
@@ -312,4 +312,61 @@ fn renest_after_locked_keeps_them_and_nests_the_rest_behind() {
     let kitted_layout = nest_job(&kitted(), &mat, Grouping::ByKit, &opts(), |_| {}, none.clone()).unwrap();
     let e = nest_after_locked(&kitted(), &kitted_layout, &[0], &opts(), |_| {}, none).unwrap_err().to_string();
     assert!(e.contains("mixed layouts only"), "{e}");
+}
+
+#[test]
+fn split_plies_nest_and_verify() {
+    use plyroll_core::split::{self, Split};
+    let m = material(MaterialKind::Ud, false);
+    // 900 × 500 with a hole and rounded corners, at three angles; the roll is 384 mm usable.
+    let mut big = PlyShape {
+        shape: shape("panel", rounded_rect(900.0, 500.0, 30.0, 0.0, 0.0), vec![circle(450.0, 250.0, 40.0, false)]),
+        ref_deg: 0.0,
+        ref_origin: RefOrigin::DrawingX,
+        cosmetic: false,
+        variants: vec![
+            Variant { angle_deg: 0.0, qty: 1, kit: None, split: None },
+            Variant { angle_deg: 45.0, qty: 1, kit: None, split: None },
+            Variant { angle_deg: 90.0, qty: 1, kit: None, split: Some(Split::Auto { overlap: 10.0, pieces: None }) },
+        ],
+    };
+    assert_eq!(split::too_wide(std::slice::from_ref(&big), &m).len(), 3);
+    assert_eq!(split::auto_split_plies(std::slice::from_mut(&mut big), &m), 2, "the 90° angle was already split");
+    let (plies, _) = split::expand(&[big], &[1], &m).unwrap();
+    assert!(plies.len() >= 6, "every angle is in pieces: {}", plies.len());
+    assert!(split::too_wide(&plies, &m).is_empty());
+    // The widest piece is right at the limit.
+    let widest = plies.iter().map(|p| split::width_across(&p.shape.outer, p.fibre_deg(&p.variants[0]), &m, false)).fold(0.0, f64::max);
+    assert!(widest > m.usable_width() - 20.0, "pieces use the roll width: {widest}");
+    let layout = nest(&plies, &m, &opts(), |_| {}, Arc::new(AtomicBool::new(false))).unwrap();
+    let r = verify(&plies, &layout);
+    assert!(r.ok, "{:?}", r.issues);
+    assert_eq!(layout.placements.len(), plies.len());
+}
+
+#[test]
+fn ply_that_only_just_fits_still_nests() {
+    // The demo rib at ±45° on a 230 mm usable roll: auto split leaves pieces
+    // just under the roll width. The solver's simplified outline of one of them
+    // was wider than the roll, so it could not be placed.
+    use plyroll_core::split;
+    let m = Material { name: "narrow".into(), kind: MaterialKind::Ud, roll_width: 250.0, edge_trim: 10.0, lead_trim: 20.0, spacing: 2.0, angle_tolerance: 0.0, tolerance_step: 0.5, warp_weft_interchangeable: false, cost_per_m2: None };
+    let q = bulge_from_sweep(PI / 2.0);
+    let v = |x: f64, y: f64, b: f64| Vtx { p: Pt::new(x, y), bulge: b };
+    let outer = Path::new(vec![v(520.0, 200.0, 0.0), v(800.0, 200.0, q), v(820.0, 220.0, 0.0), v(820.0, 290.0, q), v(800.0, 310.0, 0.0), v(520.0, 310.0, q), v(500.0, 290.0, 0.0), v(500.0, 220.0, q)], true);
+    let mut rib = PlyShape {
+        shape: shape("rib", outer, vec![]),
+        ref_deg: 0.0,
+        ref_origin: RefOrigin::DrawingX,
+        cosmetic: false,
+        variants: vec![Variant { angle_deg: 45.0, qty: 2, kit: None, split: None }, Variant { angle_deg: -45.0, qty: 2, kit: None, split: None }],
+    };
+    assert_eq!(split::auto_split_plies(std::slice::from_mut(&mut rib), &m), 2);
+    let (plies, _) = split::expand(&[rib], &[1], &m).unwrap();
+    let widest = plies.iter().map(|p| split::width_across(&p.shape.outer, p.fibre_deg(&p.variants[0]), &m, false)).fold(0.0, f64::max);
+    assert!(widest > m.usable_width() - 2.0 && widest <= m.usable_width(), "{widest}");
+    let layout = nest(&plies, &m, &opts(), |_| {}, Arc::new(AtomicBool::new(false))).expect("nest");
+    let r = verify(&plies, &layout);
+    assert!(r.ok, "{:?}", r.issues);
+    assert_eq!(layout.placements.len(), 8);
 }

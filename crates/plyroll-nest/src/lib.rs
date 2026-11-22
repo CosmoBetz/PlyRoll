@@ -120,14 +120,9 @@ pub fn build_groups(plies: &[PlyShape], material: &Material) -> Result<Vec<ItemG
             }
             let rots = allowed_rotations(ply.fibre_deg(v), material, ply.cosmetic);
             // Reject early if no allowed rotation fits across the roll.
-            let fits = rots.iter().any(|&r| {
-                let t = Affine::rot_trans(r, 0.0, 0.0);
-                let rb = BBox::of(&pts.iter().map(|&p| t.apply(p)).collect::<Vec<_>>());
-                rb.height() <= usable + 1e-6
-            });
-            if !fits {
+            if !plyroll_core::split::fits(&ply.shape.outer, ply.fibre_deg(v), material, ply.cosmetic) {
                 bail!(
-                    "{} at {:+}° does not fit across the roll: usable width is {:.1} mm (roll {:.1} mm minus edge trims)",
+                    "{} at {:+}° does not fit across the roll: usable width is {:.1} mm (roll {:.1} mm minus edge trims); split it into pieces",
                     ply.shape.name,
                     v.angle_deg,
                     usable,
@@ -222,6 +217,18 @@ pub fn build_instance(plies: &[PlyShape], material: &Material, groups: &[ItemGro
     ExtSPInstance { name: "plyroll".into(), min_item_separation: s as f32, items, strip_height: (material.usable_width() + 2.0 * s) as f32 }
 }
 
+/// Whether the solver's shape is at most `room` across the strip at every rotation.
+fn fits_across(shape: &jagua_rs::geometry::primitives::SPolygon, rotations: &[f64], room: f32) -> bool {
+    rotations.iter().all(|r| {
+        let (s, c) = (r.to_radians() as f32).sin_cos();
+        let (lo, hi) = shape.vertices().iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| {
+            let y = p.0 * s + p.1 * c;
+            (lo.min(y), hi.max(y))
+        });
+        hi - lo <= room + 1e-3
+    })
+}
+
 /// Nests all plies on one roll. Returns a layout in roll coordinates.
 pub fn nest(plies: &[PlyShape], material: &Material, opts: &NestOptions, mut on_progress: impl FnMut(&Progress), cancel: Arc<AtomicBool>) -> Result<Layout> {
     plyroll_core::job::validate_material(material)?;
@@ -238,7 +245,15 @@ pub fn nest(plies: &[PlyShape], material: &Material, opts: &NestOptions, mut on_
         config.cmpr_cfg.shrink_decay = ShrinkDecayStrategy::FailureBased(DEFAULT_FAIL_DECAY_RATIO_CMPR);
     }
     let importer = Importer::new(config.cde_config, config.poly_simpl_tolerance, config.narrow_concavity_cutoff_ratio);
-    let instance = jagua_rs::probs::spp::io::import_instance(&importer, &ext)?;
+    let mut instance = jagua_rs::probs::spp::io::import_instance(&importer, &ext)?;
+    // Simplifying can push convex corners outwards. A ply that only just fits
+    // across the roll (split pieces often do) may then no longer fit, and the
+    // solver fails to place it. Nest exact shapes then.
+    let room = ext.strip_height - ext.min_item_separation;
+    if !instance.items.iter().all(|(item, _)| fits_across(item.shape_cd(), &groups[item.external_id() as usize].rotations, room)) {
+        let exact = Importer::new(config.cde_config, None, config.narrow_concavity_cutoff_ratio);
+        instance = jagua_rs::probs::spp::io::import_instance(&exact, &ext)?;
+    }
     let seed = opts.seed.unwrap_or_else(rand::random);
     let rng = Xoshiro256PlusPlus::seed_from_u64(seed);
     let mut listener = Listener {
