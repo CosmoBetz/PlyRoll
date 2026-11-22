@@ -12,6 +12,7 @@ pub mod orient;
 pub mod pdf;
 pub mod project;
 pub mod report;
+pub mod edit;
 pub mod rolls;
 pub mod template;
 pub mod verify;

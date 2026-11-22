@@ -59,6 +59,9 @@ export interface AppView {
   dirty: boolean;
   can_undo: boolean;
   can_redo: boolean;
+  /** Hand edits of the result, apart from the project's undo. */
+  can_undo_edit: boolean;
+  can_redo_edit: boolean;
   plies: Ply[];
   ready: Readiness;
   job: JobSettings;
@@ -157,6 +160,8 @@ export interface VerifyReport {
   issues: string[];
   min_gap: number | null;
   max_fibre_deviation: number;
+  /** Placements named in an issue. */
+  bad: number[];
 }
 
 export interface Summary {
@@ -174,6 +179,10 @@ export interface RunInfo {
   seed: number;
   solve_seconds: number;
   stopped: boolean;
+  /** Moves and turns made by hand after nesting. */
+  edits: number;
+  /** Locked plies kept from the previous layout; the rest was nested after them. */
+  kept: number;
 }
 
 export interface ShapeGeom {
@@ -199,6 +208,8 @@ export interface Placement {
   /** Fibre direction on the roll, degrees from the roll axis. */
   fibre: number;
   label: string;
+  /** Smallest turn that keeps the fibres along the roll (180, or 90 on swappable twill). */
+  turn: number;
 }
 
 export interface ResultView {
@@ -214,7 +225,15 @@ export interface ResultView {
   sections: LayoutSection[];
   /** Identifies this nest in roll bookings. */
   key: string;
+  /** Placements locked against hand edits. */
+  locked: number[];
 }
+
+/** A hand edit of the result (plyroll-core edit.rs). */
+export type Edit =
+  | { op: "move"; indices: number[]; dx: number; dy: number }
+  | { op: "rotate"; index: number; by: number }
+  | { op: "lock"; indices: number[]; on: boolean };
 
 export interface NestStarted {
   run: number;

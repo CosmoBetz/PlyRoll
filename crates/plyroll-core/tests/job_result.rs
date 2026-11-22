@@ -75,7 +75,7 @@ fn result_goes_stale_on_edits_and_survives_save() {
     p.set_job(JobSettings { material: Some(ud()), time_s: 30, sets: 1, ..Default::default() }).unwrap();
     let input = p.nest_input(None).unwrap();
     let layout = Layout { material: input.material.clone(), placements: vec![], used_length: 100.0, sections: vec![] };
-    p.result = Some(NestResult::new(input, layout, RunInfo { seed: 1, solve_seconds: 2.0, stopped: false }));
+    p.result = Some(NestResult::new(input, layout, RunInfo { seed: 1, solve_seconds: 2.0, stopped: false, edits: 0, kept: 0 }));
     assert!(p.freshness().unwrap().fresh);
 
     // Editing a quantity makes it stale; changing it back makes it fresh again.

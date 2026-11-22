@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { createBackend, type Backend } from "./lib/backend";
-  import type { AppView, ImportReport, ImportSettings, JobSettings, LibraryView, LiveNest, Material, NestDone, Ply, RefPick, Roll, RollsView, SourceFile, Variant } from "./lib/types";
+  import type { AppView, Edit, ImportReport, ImportSettings, JobSettings, LibraryView, LiveNest, Material, NestDone, Ply, RefPick, Roll, RollsView, SourceFile, Variant } from "./lib/types";
   import { angleColor, pickLabel, variantLabel } from "./lib/geo";
   import Editor from "./lib/Editor.svelte";
   import Thumb from "./lib/Thumb.svelte";
@@ -281,10 +281,18 @@
     setJob({ ...view.job, material: structuredClone($state.snapshot(m)) });
   }
 
-  async function startNest() {
+  async function startNest(keepLocked = false) {
     if (!backend || live) return;
+    // Nesting everything again replaces the layout, hand edits and locks included.
+    const r = view?.result;
+    if (!keepLocked && r && r.fresh && (r.run.edits > 0 || r.locked.length > 0)) {
+      const what = [r.run.edits ? `${r.run.edits} hand edit${r.run.edits === 1 ? "" : "s"}` : "", r.locked.length ? `${r.locked.length} locked pl${r.locked.length === 1 ? "y" : "ies"}` : ""]
+        .filter(Boolean)
+        .join(" and ");
+      if (!(await backend.confirm(`Nesting again replaces this layout with its ${what}. Locked plies are not kept in place${r.locked.length && !r.sections.length ? " (Nest the unlocked plies keeps them)" : ""}.`, "Nest everything again"))) return;
+    }
     try {
-      const s = await backend.startNest();
+      const s = await backend.startNest(keepLocked);
       live = { run: s.run, time_s: s.time_s, shapes: s.shapes, placements: null, length: null, density: null, elapsed: 0, phase: "start", stopping: false, sections: [], section: null };
       const early = earlyDone.get(s.run);
       if (early) nestDone(early);
@@ -325,8 +333,19 @@
     }
   }
 
-  const undo = () => backend && view?.can_undo && run(() => backend!.undo());
-  const redo = () => backend && view?.can_redo && run(() => backend!.redo());
+  // In the Nest view, undo and redo act on hand edits of the layout first, while
+  // the layout can be edited (current, no nest running, not booked); otherwise on the project.
+  const layoutEditable = $derived.by(() => {
+    const r = view?.result;
+    if (mode !== "nest" || !r || !r.fresh || live || view?.running != null) return false;
+    return !rolls.rolls.some((x) => x.usage?.some((u) => u.result === r.key));
+  });
+  const editUndo = $derived(layoutEditable && !!view?.can_undo_edit);
+  const editRedo = $derived(layoutEditable && !!view?.can_redo_edit);
+  const undoEdit = (redo: boolean) => backend && run(() => backend!.undoEdit(redo));
+  const undo = () => backend && (editUndo ? undoEdit(false) : view?.can_undo && run(() => backend!.undo()));
+  const redo = () => backend && (editRedo ? undoEdit(true) : view?.can_redo && run(() => backend!.redo()));
+  const editResult = (e: Edit) => run(() => backend!.editResult(e));
 
   /** [ / Q turn clockwise, ] / E counter-clockwise; by key so it works on any layout. */
   function turnDir(e: KeyboardEvent): -1 | 0 | 1 {
@@ -488,8 +507,8 @@
       <button onclick={openImportSettings} title="Units and gap tolerances for reading DXFs">Import settings…</button>
     </div>
     <div class="group">
-      <button onclick={undo} disabled={!view?.can_undo} title="Undo (⌘Z)">Undo</button>
-      <button onclick={redo} disabled={!view?.can_redo} title="Redo (⇧⌘Z)">Redo</button>
+      <button onclick={undo} disabled={!view?.can_undo && !editUndo} title={editUndo ? "Undo the last layout edit (⌘Z)" : "Undo (⌘Z)"}>Undo</button>
+      <button onclick={redo} disabled={!view?.can_redo && !editRedo} title={editRedo ? "Redo the layout edit (⇧⌘Z)" : "Redo (⇧⌘Z)"}>Redo</button>
     </div>
     <div class="title">
       {view?.name ?? ""}{#if view?.dirty}<span class="dirty" title="Unsaved changes">•</span>{/if}
@@ -530,6 +549,9 @@
       onmanagerolls={() => (showRolls = true)}
       onbook={bookRoll}
       onunbook={unbookRoll}
+      onedit={editResult}
+      onundoedit={undoEdit}
+      keys={!showMaterials && !showImport && !showRolls && !showHelp}
     />
   {:else}
     <main>
@@ -644,9 +666,20 @@
         <dt>1–9 / 0</dt><dd>preview ply angle n / all</dd>
         <dt>V, double-click</dt><dd>fit view · wheel zooms · drag pans</dd>
         <dt>⌫</dt><dd>remove selected plies</dd>
-        <dt>⌘Z / ⇧⌘Z</dt><dd>undo / redo</dd>
+        <dt>⌘Z / ⇧⌘Z</dt><dd>undo / redo (in Nest: layout edits first)</dd>
         <dt>⌘1 / ⌘2</dt><dd>plies / nest</dd>
       </dl>
+      <h3>Nest: editing the layout</h3>
+      <dl>
+        <dt>click, ⇧-click</dt><dd>select a ply / add to the selection</dd>
+        <dt>drag a ply</dt><dd>move the selection (drag empty roll pans)</dd>
+        <dt>← → ↑ ↓</dt><dd>nudge 1 mm (⇧ 10 mm, ⌥ 0.1 mm)</dd>
+        <dt>R / ⇧R</dt><dd>turn 180° (90° on swappable twill)</dd>
+        <dt>[ ]</dt><dd>fine turn within the fibre tolerance</dd>
+        <dt>L</dt><dd>lock / unlock</dd>
+        <dt>Esc</dt><dd>clear the selection</dd>
+      </dl>
+      <p class="hint">With plies locked on a Mixed nest, <b>Nest the unlocked plies</b> keeps them in place and nests the rest on the roll after the last of them.</p>
       <button onclick={() => (showHelp = false)}>Close</button>
     </div>
   {/if}
@@ -917,6 +950,8 @@
     padding: 14px 16px;
     box-shadow: 0 8px 30px rgb(0 0 0 / 0.18);
     font-size: 13px;
+    max-height: calc(100vh - 70px);
+    overflow-y: auto;
   }
   .help h3 {
     margin: 0 0 8px;

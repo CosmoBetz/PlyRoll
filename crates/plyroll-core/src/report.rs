@@ -51,6 +51,12 @@ pub struct RunInfo {
     /// Stopped by the user before the time limit.
     #[serde(default)]
     pub stopped: bool,
+    /// Moves and turns made by hand after nesting.
+    #[serde(default)]
+    pub edits: u32,
+    /// Locked plies kept in place from the previous layout (the rest was nested after them).
+    #[serde(default)]
+    pub kept: u32,
 }
 
 /// Job name, date and roll printed on report.pdf and in labels.csv.
@@ -258,6 +264,8 @@ pub fn write_outputs(
     obj.insert("solve_seconds".into(), run.solve_seconds.into());
     obj.insert("seed".into(), run.seed.into());
     obj.insert("stopped_early".into(), run.stopped.into());
+    obj.insert("hand_edits".into(), run.edits.into());
+    obj.insert("kept_locked".into(), run.kept.into());
     obj.insert("import_warnings".into(), serde_json::to_value(warnings)?);
     if let Some(r) = &meta.roll {
         obj.insert("roll".into(), serde_json::to_value(r)?);

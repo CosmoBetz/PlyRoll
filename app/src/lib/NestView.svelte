@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AppView, Grouping, JobSettings, LibraryView, LiveNest as Live, Material, Paper, Roll, RollsView } from "./types";
+  import type { AppView, Edit, Grouping, JobSettings, LibraryView, LiveNest as Live, Material, Paper, Roll, RollsView } from "./types";
   import RollView from "./RollView.svelte";
 
   let {
@@ -17,13 +17,17 @@
     onmanagerolls,
     onbook,
     onunbook,
+    onedit,
+    onundoedit,
+    keys = true,
   }: {
     view: AppView;
     library: LibraryView;
     rolls: RollsView;
     live: Live | null;
     onjob: (job: JobSettings) => void;
-    onstart: () => void;
+    /** With `keepLocked`, locked plies stay and the rest is nested after them. */
+    onstart: (keepLocked?: boolean) => void;
     onstop: () => void;
     onexport: () => void;
     onmanage: () => void;
@@ -32,6 +36,11 @@
     onmanagerolls: () => void;
     onbook: () => void;
     onunbook: () => void;
+    /** A hand edit of the result; false when it was refused. */
+    onedit: (e: Edit) => Promise<boolean>;
+    onundoedit: (redo: boolean) => void;
+    /** Keyboard shortcuts are active (no dialog open). */
+    keys?: boolean;
   } = $props();
 
   let roll = $state<RollView>();
@@ -118,10 +127,67 @@
     if (result) return { shapes: result.shapes, placements: result.placements, used: result.used_length, live: false, sections: result.sections ?? [] };
     return null;
   });
+  // ---- editing by hand
+  let selected = $state<number[]>([]);
+  // A new nest starts with nothing selected; edits keep the selection.
+  let selFor = "";
+  $effect(() => {
+    const k = result ? `${result.key}|${result.run.solve_seconds}|${result.placements.length}` : "";
+    if (k !== selFor) {
+      selFor = k;
+      selected = [];
+    }
+  });
+  const editBlock = $derived(
+    !result || live || view.running != null
+      ? "Nesting…"
+      : !result.fresh
+        ? "Out of date: nest again first."
+        : booking
+          ? `Booked on roll ${booking.roll.id}: take the booking back to change the layout.`
+          : null,
+  );
+  const canEdit = $derived(!!result && !editBlock);
+  // Nesting again can keep the locked plies (mixed layouts, current result).
+  const keepable = $derived(!!result && result.fresh && result.locked.length > 0 && result.sections.length === 0 && result.locked.length < result.placements.length);
+  const lockedSet = $derived(new Set(result?.locked ?? []));
+  const allLocked = $derived(selected.length > 0 && selected.every((i) => lockedSet.has(i)));
+  const anyLocked = $derived(selected.some((i) => lockedSet.has(i)));
+  const one = $derived(selected.length === 1 && result ? result.placements[selected[0]] : null);
+  const fineStep = $derived(result && result.shapes.material.angle_tolerance > 0 ? result.shapes.material.tolerance_step : 0);
+  // Edits go out one after another, so a held arrow key never shows an older layout last.
+  let queue: Promise<unknown> = Promise.resolve();
+  function send(e: Edit) {
+    if (!canEdit) return;
+    queue = queue.then(() => onedit(e));
+  }
+  const move = (dx: number, dy: number) => selected.length && send({ op: "move", indices: [...selected], dx, dy });
+  const turn = (sign: number) => one && send({ op: "rotate", index: selected[0], by: sign * one.turn });
+  const fine = (sign: number) => one && fineStep && send({ op: "rotate", index: selected[0], by: sign * fineStep });
+  const toggleLock = () => selected.length && send({ op: "lock", indices: [...selected], on: !allLocked });
+  function onkeydown(e: KeyboardEvent) {
+    if (!keys || !canEdit || e.metaKey || e.ctrlKey) return;
+    const t = e.target as HTMLElement;
+    if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT") return;
+    const step = e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
+    const arrows: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] };
+    const k = e.key.toLowerCase();
+    if (arrows[e.key] && selected.length) move(...arrows[e.key]);
+    else if (k === "r") turn(e.shiftKey ? -1 : 1);
+    else if (e.key === "[" || e.code === "BracketLeft") fine(-1);
+    else if (e.key === "]" || e.code === "BracketRight") fine(1);
+    else if (k === "l") toggleLock();
+    else if (e.key === "Escape" && selected.length) selected = [];
+    else return;
+    e.preventDefault();
+  }
+
   const exportBlock = $derived(
     !result ? "Nothing nested yet" : !result.fresh ? "Out of date: nest again first" : !result.summary.verification.ok ? "Failed verification" : null,
   );
 </script>
+
+<svelte:window {onkeydown} />
 
 <div class="nest">
   <aside class="job">
@@ -246,7 +312,19 @@
       {#if running}
         <button class="big stop" onclick={onstop} disabled={live?.stopping}>{live?.stopping ? "Stopping…" : "Stop and keep best"}</button>
       {:else}
-        <button class="big primary" onclick={onstart} disabled={!view.nest_ready.ok}>{result ? "Nest again" : "Nest"}</button>
+        {#if keepable}
+          <button class="big primary" onclick={() => onstart(true)} disabled={!view.nest_ready.ok}>Nest the unlocked plies</button>
+          <p class="hint">
+            Keeps the {result!.locked.length} locked pl{result!.locked.length === 1 ? "y" : "ies"} where {result!.locked.length === 1 ? "it is" : "they are"} and nests
+            the rest on the roll after the last of them. Gaps between locked plies are not filled.
+          </p>
+          <button class="big" onclick={() => onstart(false)} disabled={!view.nest_ready.ok}>Nest everything again</button>
+        {:else}
+          <button class="big primary" onclick={() => onstart(false)} disabled={!view.nest_ready.ok}>{result ? "Nest again" : "Nest"}</button>
+          {#if result?.fresh && result.locked.length && result.sections.length}
+            <p class="hint">Kit by kit, locked plies cannot be kept when nesting again: nesting replaces the whole layout. Keeping locked plies works on nests made with the Mixed layout.</p>
+          {/if}
+        {/if}
       {/if}
       {#if live}
         <div class="progress" title="{live.phase}">
@@ -262,7 +340,21 @@
 
   <section class="stage">
     {#if canvas}
-      <RollView bind:this={roll} shapes={canvas.shapes} placements={canvas.placements} usedLength={canvas.used} live={canvas.live} sections={canvas.sections} />
+      <RollView
+        bind:this={roll}
+        shapes={canvas.shapes}
+        placements={canvas.placements}
+        usedLength={canvas.used}
+        live={canvas.live}
+        sections={canvas.sections}
+        editable={!canvas.live && canEdit}
+        {selected}
+        locked={canvas.live ? [] : (result?.locked ?? [])}
+        bad={canvas.live || !result ? [] : result.summary.verification.bad}
+        frameKey={result?.key ?? ""}
+        onselect={(idx) => (selected = idx)}
+        onmove={(idx, dx, dy) => send({ op: "move", indices: idx, dx, dy })}
+      />
       <button class="fit" onclick={() => roll?.fit()} title="Fit (double-click)">Fit</button>
       {#if live && !live.placements}<div class="banner">Building a first layout…</div>{/if}
     {:else}
@@ -285,7 +377,7 @@
       {#if !result.fresh}
         <div class="stale">
           <b>Out of date.</b> {result.stale_reason}
-          <button onclick={onstart} disabled={!view.nest_ready.ok}>Nest again</button>
+          <button onclick={() => onstart(false)} disabled={!view.nest_ready.ok}>Nest again</button>
         </div>
       {/if}
       <div class="verdict" class:ok={result.summary.verification.ok}>
@@ -305,7 +397,44 @@
         <dt>Fibre error</dt><dd class="num">{result.summary.verification.max_fibre_deviation.toFixed(4)}°</dd>
         <dt>Material</dt><dd>{result.shapes.material.name}</dd>
         <dt>Solved in</dt><dd class="num">{fmtTime(result.run.solve_seconds)}{result.run.stopped ? " (stopped)" : ""}</dd>
+        {#if result.run.kept}<dt>Kept locked</dt><dd class="num">{result.run.kept}</dd>{/if}
+        {#if result.run.edits}<dt>Hand edits</dt><dd class="num">{result.run.edits}</dd>{/if}
       </dl>
+      <div class="editbox">
+        <h4>Edit by hand</h4>
+        {#if editBlock}
+          <p class="hint">{editBlock}</p>
+        {:else}
+          {#if one}
+            <p class="sel-line"><b>{one.label}</b> copy {one.copy}{lockedSet.has(selected[0]) ? " · locked" : ""}</p>
+          {:else if selected.length}
+            <p class="sel-line"><b>{selected.length} plies</b> selected{anyLocked ? (allLocked ? " · locked" : " · some locked") : ""}</p>
+          {:else}
+            <p class="hint">Click a ply to select it (⇧-click adds more), then drag it or use the keys below.</p>
+          {/if}
+          <div class="tools">
+            <button onclick={() => turn(1)} disabled={!one || anyLocked} title={one ? `Turn ${one.turn}° about its centre (R; ⇧R the other way)` : "Select one ply"}
+              >Turn {one?.turn ?? 180}°</button
+            >
+            {#if fineStep}
+              <button onclick={() => fine(-1)} disabled={!one || anyLocked} title="Turn clockwise within the fibre tolerance ([)">−{fineStep}°</button>
+              <button onclick={() => fine(1)} disabled={!one || anyLocked} title="Turn counter-clockwise within the fibre tolerance (])">+{fineStep}°</button>
+            {/if}
+            <button onclick={toggleLock} disabled={!selected.length} title="Locked plies cannot be moved or turned (L)">{allLocked ? "Unlock" : "Lock"}</button>
+          </div>
+          <div class="tools">
+            <button onclick={() => onundoedit(false)} disabled={!view.can_undo_edit} title="Undo the last move, turn or lock (⌘Z)">Undo</button>
+            <button onclick={() => onundoedit(true)} disabled={!view.can_redo_edit} title="Redo (⇧⌘Z)">Redo</button>
+            {#if result.summary.verification.bad.length}
+              <button class="link" onclick={() => (selected = [...result.summary.verification.bad])}>Select the plies with problems</button>
+            {/if}
+          </div>
+          <p class="hint">
+            Arrows nudge 1 mm (⇧ 10 mm, ⌥ 0.1 mm) · R turns · {fineStep ? "[ ] fine turn · " : ""}L locks · Esc clears. Turns keep the fibres along the roll. Every
+            change is checked again; export needs a pass.
+          </p>
+        {/if}
+      </div>
       <div class="tpl">
         <label for="paper">1:1 templates</label>
         <select id="paper" value={paper?.kind ?? ""} onchange={(e) => setPaper((e.currentTarget as HTMLSelectElement).value)}>
@@ -454,6 +583,23 @@
   }
   .tpl input {
     width: 70px;
+  }
+  .editbox {
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    padding: 10px 0;
+    margin-bottom: 12px;
+  }
+  .editbox .tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin: 6px 0;
+  }
+  .sel-line {
+    font-size: 12px;
+    margin: 0 0 6px;
   }
   .booking {
     margin-top: 12px;

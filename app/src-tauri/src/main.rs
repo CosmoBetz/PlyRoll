@@ -8,6 +8,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use plyroll_core::edit::{Edit, EditSnapshot};
 use plyroll_core::job::{load_materials, save_materials};
 use plyroll_core::model::{Material, Variant};
 use plyroll_core::project::{ImportReport, ImportSettings, JobSettings, NestResult, Project, RefPick, SourceFile};
@@ -15,7 +16,7 @@ use plyroll_core::report::{OutputOptions, ReportMeta, RunInfo, now_utc, today_ut
 use plyroll_core::rolls::{Roll, RollInfo, Usage, load_rolls, result_key, save_rolls};
 use plyroll_core::view::{LayoutShapes, PlacementView, PlyView, ResultView, layout_shapes, placement_views, project_view, result_view};
 use plyroll_core::kits::LayoutSection;
-use plyroll_nest::{NestOptions, nest_job};
+use plyroll_nest::{NestOptions, Progress, nest_after_locked, nest_job};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -42,13 +43,16 @@ struct AppState {
     dirty: bool,
     undo: Vec<Project>,
     redo: Vec<Project>,
+    /// Hand edits of `result`, apart from the project's undo; cleared by a new nest.
+    edit_undo: Vec<EditSnapshot>,
+    edit_redo: Vec<EditSnapshot>,
     run: Option<Run>,
 }
 
 impl AppState {
     fn with(mut project: Project, path: Option<PathBuf>) -> Self {
         let result = project.result.take();
-        AppState { project, result, path, dirty: false, undo: Vec::new(), redo: Vec::new(), run: None }
+        AppState { project, result, path, dirty: false, undo: Vec::new(), redo: Vec::new(), edit_undo: Vec::new(), edit_redo: Vec::new(), run: None }
     }
 
     fn fresh() -> Self {
@@ -191,6 +195,8 @@ struct AppView {
     dirty: bool,
     can_undo: bool,
     can_redo: bool,
+    can_undo_edit: bool,
+    can_redo_edit: bool,
     plies: Vec<PlyView>,
     ready: Readiness,
     job: JobSettings,
@@ -245,6 +251,8 @@ fn view(st: &AppState, window: &WebviewWindow) -> AppView {
         dirty: st.dirty,
         can_undo: !st.undo.is_empty(),
         can_redo: !st.redo.is_empty(),
+        can_undo_edit: !st.edit_undo.is_empty(),
+        can_redo_edit: !st.edit_redo.is_empty(),
         plies: project_view(&st.project),
         ready,
         job: st.project.job.clone(),
@@ -548,6 +556,66 @@ fn unbook_roll(state: Shared, inv: SharedInv) -> CmdResult<RollsView> {
     Ok(rolls_view(&inv))
 }
 
+// ---- editing the result by hand ---------------------------------------------
+
+/// Can the current result be edited? It must be current, not being replaced
+/// by a running nest, and not booked (the booking holds its length).
+fn editable<'a>(st: &'a mut AppState, inv: &Inventory) -> CmdResult<&'a mut NestResult> {
+    if st.run.is_some() {
+        return Err("a nest is running; wait for it or stop it first".into());
+    }
+    let r = st.result.as_ref().ok_or("nothing nested yet")?;
+    let f = st.project.check_result(r);
+    if !f.fresh {
+        return Err(format!("the nest is out of date ({}). Nest again before editing it.", f.reason.unwrap_or_default()));
+    }
+    let key = result_key(&r.fingerprint, r.run.seed);
+    if let Some(roll) = inv.rolls.iter().find(|x| x.booking(&key).is_some()) {
+        return Err(format!("this nest is booked on roll '{}'. Take the booking back before changing the layout.", roll.id));
+    }
+    Ok(st.result.as_mut().expect("checked above"))
+}
+
+/// Moves, turns or locks plies of the current result (one edit undo step).
+#[tauri::command]
+fn edit_result(edit: Edit, state: Shared, inv: SharedInv, window: WebviewWindow) -> CmdResult<AppView> {
+    let mut st = state.lock().unwrap();
+    let inv = inv.lock().unwrap();
+    let r = editable(&mut st, &inv)?;
+    let before = r.snapshot();
+    r.edit(&edit).map_err(err)?;
+    if r.snapshot() != before {
+        st.edit_undo.push(before);
+        if st.edit_undo.len() > UNDO_LIMIT {
+            st.edit_undo.remove(0);
+        }
+        st.edit_redo.clear();
+        st.dirty = true;
+    }
+    Ok(view(&st, &window))
+}
+
+#[tauri::command]
+fn undo_edit(redo: bool, state: Shared, inv: SharedInv, window: WebviewWindow) -> CmdResult<AppView> {
+    let mut st = state.lock().unwrap();
+    let inv = inv.lock().unwrap();
+    let snap = if redo { st.edit_redo.pop() } else { st.edit_undo.pop() };
+    let Some(snap) = snap else { return Ok(view(&st, &window)) };
+    let r = match editable(&mut st, &inv) {
+        Ok(r) => r,
+        Err(e) => {
+            // Put it back: nothing changed.
+            if redo { st.edit_redo.push(snap) } else { st.edit_undo.push(snap) }
+            return Err(e);
+        }
+    };
+    let cur = r.snapshot();
+    r.restore(snap);
+    if redo { st.edit_undo.push(cur) } else { st.edit_redo.push(cur) }
+    st.dirty = true;
+    Ok(view(&st, &window))
+}
+
 // ---- nesting ----------------------------------------------------------------
 
 #[derive(Clone, Serialize)]
@@ -586,12 +654,29 @@ struct NestDone {
 }
 
 #[tauri::command]
-fn start_nest(app: AppHandle, state: Shared) -> CmdResult<NestStarted> {
+/// Nests the job. With `keep_locked`, the locked plies of the current result
+/// stay where they are and the rest is nested on the roll after them.
+fn start_nest(keep_locked: bool, app: AppHandle, state: Shared) -> CmdResult<NestStarted> {
     let mut st = state.lock().unwrap();
     if st.run.is_some() {
         return Err("a nest is already running".into());
     }
     let input = st.project.nest_input(None).map_err(err)?;
+    let keep = if keep_locked {
+        let r = st.result.as_ref().ok_or("nothing nested yet")?;
+        if !st.project.check_result(r).fresh {
+            return Err("the nest is out of date, so its locked plies cannot be kept. Nest everything again.".into());
+        }
+        if r.locked.is_empty() {
+            return Err("no ply is locked".into());
+        }
+        if !r.layout.sections.is_empty() {
+            return Err("re-nesting after locked plies works on mixed layouts only, and this nest is kit by kit; nest everything again instead".into());
+        }
+        Some((r.layout.clone(), r.locked.clone(), r.run.edits))
+    } else {
+        None
+    };
     // Fail fast (e.g. a ply wider than the roll) before starting the thread.
     plyroll_nest::build_groups(&input.plies, &input.material).map_err(err)?;
     let id = RUN_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
@@ -611,12 +696,7 @@ fn start_nest(app: AppHandle, state: Shared) -> CmdResult<NestStarted> {
         let mut section = usize::MAX;
         let mut last_emit: Option<Instant> = None;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            nest_job(
-                &input.plies,
-                &input.material,
-                input.grouping,
-                &opts,
-                |p| {
+            let mut report = |p: &Progress| {
                     // Kit by kit, the length restarts with every kit.
                     if let Some(s) = &p.section
                         && s.index != section
@@ -646,9 +726,11 @@ fn start_nest(app: AppHandle, state: Shared) -> CmdResult<NestStarted> {
                             },
                         );
                     }
-                },
-                cancel.clone(),
-            )
+                };
+            match &keep {
+                Some((layout, locked, _)) => nest_after_locked(&input.plies, layout, locked, &opts, &mut report, cancel.clone()),
+                None => nest_job(&input.plies, &input.material, input.grouping, &opts, &mut report, cancel.clone()),
+            }
         }));
         let stopped = cancel.load(Ordering::SeqCst);
         let state = app.state::<Mutex<AppState>>();
@@ -659,8 +741,14 @@ fn start_nest(app: AppHandle, state: Shared) -> CmdResult<NestStarted> {
         st.run = None;
         let error = match outcome {
             Ok(Ok(layout)) => {
-                let run = RunInfo { seed, solve_seconds: start.elapsed().as_secs_f64(), stopped };
-                st.result = Some(NestResult::new(input, layout, run));
+                let (edits, kept) = keep.as_ref().map_or((0, 0), |(_, l, e)| (*e, l.len()));
+                let run = RunInfo { seed, solve_seconds: start.elapsed().as_secs_f64(), stopped, edits, kept: kept as u32 };
+                let mut result = NestResult::new(input, layout, run);
+                // The kept plies come first and stay locked.
+                result.locked = (0..kept).collect();
+                st.result = Some(result);
+                st.edit_undo.clear();
+                st.edit_redo.clear();
                 st.dirty = true;
                 None
             }
@@ -756,6 +844,8 @@ fn main() {
             delete_roll,
             book_roll,
             unbook_roll,
+            edit_result,
+            undo_edit,
             start_nest,
             stop_nest,
             export_result,

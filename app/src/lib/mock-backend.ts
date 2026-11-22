@@ -3,8 +3,9 @@
 // geometry rules are simplified and nothing is saved.
 
 import type { Backend } from "./backend";
-import type { AppView, ImportSettings, JobSettings, LayoutShapes, Material, NestDone, NestProgress, Placement, Ply, RefOrigin, RefPick, ResultView, Roll, RollsView } from "./types";
+import type { AppView, Edit, ImportSettings, JobSettings, LayoutShapes, Material, NestDone, NestProgress, Placement, Ply, RefOrigin, RefPick, ResultView, Roll, RollsView } from "./types";
 import { longestEdge, normAxis, totalQty } from "./geo";
+import { boxOf, clashes, placedOutline } from "./collide";
 import demo from "../mock/demo-view.json";
 
 // The demo material library (examples/demo/materials.toml).
@@ -58,7 +59,7 @@ function fakeNest(plies: Ply[], job: JobSettings, shuffle: number): { shapes: La
       colW = 0;
       y = m.edge_trim;
     }
-    placements.push({ shape: it.shape, angle: it.angle, kit: it.kit, copy: it.copy, rotation: it.rot, tx: colX - it.minx, ty: y - it.miny, fibre: 0, label: `${nested[it.shape].name} ${it.angle}°` });
+    placements.push({ shape: it.shape, angle: it.angle, kit: it.kit, copy: it.copy, rotation: it.rot, tx: colX - it.minx, ty: y - it.miny, fibre: 0, label: `${nested[it.shape].name} ${it.angle}°`, turn: 180 });
     y += it.h + m.spacing;
     colW = Math.max(colW, it.w);
     length = Math.max(length, colX + it.w);
@@ -75,6 +76,9 @@ export function createMockBackend(): Backend {
   let dirty = false;
   let library: Material[] = structuredClone(DEMO_MATERIALS);
   let result: Omit<ResultView, "fresh" | "stale_reason"> | null = null;
+  type EditSnap = { placements: Placement[]; locked: number[]; edits: number; used: number };
+  let editUndo: EditSnap[] = [];
+  let editRedo: EditSnap[] = [];
   let rolls: Roll[] = structuredClone(DEMO_ROLLS);
   const today = new Date().toISOString().slice(0, 10);
   const rollsView = (): RollsView => ({ path: "(browser mock)", rolls: structuredClone(rolls), error: null, today });
@@ -100,6 +104,8 @@ export function createMockBackend(): Backend {
       dirty,
       can_undo: undo.length > 0,
       can_redo: redo.length > 0,
+      can_undo_edit: editUndo.length > 0,
+      can_redo_edit: editRedo.length > 0,
       plies: structuredClone(plies),
       ready,
       job: structuredClone(job),
@@ -110,6 +116,35 @@ export function createMockBackend(): Backend {
     };
   };
   const snapshot = (): Snapshot => structuredClone({ plies, job });
+  type Result = Omit<ResultView, "fresh" | "stale_reason">;
+  const snap = (r: Result): EditSnap => structuredClone({ placements: r.placements, locked: r.locked, edits: r.run.edits, used: r.used_length });
+  const editable = (): Result => {
+    if (running) throw "a nest is running; wait for it or stop it first";
+    if (!result) throw "nothing nested yet";
+    if (result.key !== inputKey()) throw "the nest is out of date. Nest again before editing it.";
+    const key = result.key;
+    const booked = rolls.find((x) => x.usage?.some((u) => u.result === key));
+    if (booked) throw `this nest is booked on roll '${booked.id}'. Take the booking back before changing the layout.`;
+    return result;
+  };
+  /** Used length, numbers and the (display-outline) check after an edit. */
+  const refit = (r: Result) => {
+    const m = r.shapes.material;
+    r.used_length = Math.max(m.lead_trim, ...r.placements.map((pl) => boxOf(placedOutline(r.shapes, pl))[2]));
+    const c = clashes(r.shapes, r.placements, null);
+    const roll = r.used_length * m.roll_width;
+    const usable = (r.used_length - m.lead_trim) * (m.roll_width - 2 * m.edge_trim);
+    const parts = r.summary.parts_area_m2 * 1e6;
+    r.summary = {
+      ...r.summary,
+      used_length_mm: r.used_length,
+      roll_area_m2: roll / 1e6,
+      utilization_of_roll: parts / roll,
+      utilization_of_usable_area: parts / usable,
+      material_cost: m.cost_per_m2 == null ? null : (m.cost_per_m2 * roll) / 1e6,
+      verification: { ...r.summary.verification, ok: c.issues.length === 0, issues: c.issues, bad: [...c.bad].sort((a, b) => a - b) },
+    };
+  };
   const change = (ids: number[], f: (p: Ply) => void): Promise<AppView> => {
     const before = snapshot();
     try {
@@ -312,17 +347,37 @@ export function createMockBackend(): Backend {
       r.remaining_m += u.length_m;
       return rollsView();
     },
-    startNest: async () => {
+    startNest: async (keepLocked = false) => {
       if (running) throw "a nest is already running";
       const b = blockedMsg();
       if (b) throw b;
       if (!job.material) throw "choose a material for this project first";
       const id = ++runSeq;
       const key = inputKey();
+      // Keeping locked plies: they stay, everything else goes after the last of them.
+      let keep: { placements: Placement[]; end: number; edits: number } | null = null;
+      if (keepLocked) {
+        if (!result || result.key !== key) throw "the nest is out of date, so its locked plies cannot be kept. Nest everything again.";
+        if (!result.locked.length) throw "no ply is locked";
+        if (result.sections.length) throw "re-nesting after locked plies works on mixed layouts only, and this nest is kit by kit; nest everything again instead";
+        const r = result;
+        const kept = r.locked.map((i) => structuredClone(r.placements[i]));
+        if (kept.length === r.placements.length) throw "every ply is locked, so there is nothing left to nest";
+        keep = { placements: kept, end: Math.max(...kept.map((pl) => boxOf(placedOutline(r.shapes, pl))[2])), edits: r.run.edits };
+      }
+      const around = (n: ReturnType<typeof fakeNest>) => {
+        if (!keep) return n;
+        const k = keep;
+        const dx = k.end + job.material!.spacing - job.material!.lead_trim;
+        const rest = n.placements
+          .filter((pl) => !k.placements.some((q) => q.shape === pl.shape && q.angle === pl.angle && q.copy === pl.copy))
+          .map((pl) => ({ ...pl, tx: pl.tx + dx }));
+        return { ...n, placements: [...k.placements, ...rest], length: Math.max(k.end, n.length + dx) };
+      };
       const start = Date.now();
       const total = Math.min(job.time_s, 6) * 1000;
       let step = 0;
-      let best = fakeNest(plies, job, 0);
+      let best = around(fakeNest(plies, job, 0));
       const shapes = best.shapes;
       const finish = (stopped: boolean) => {
         clearInterval(timer);
@@ -341,21 +396,24 @@ export function createMockBackend(): Backend {
             utilization_of_usable_area: parts / usable,
             material_cost: m.cost_per_m2 == null ? null : (m.cost_per_m2 * roll) / 1e6,
             plies: best.placements.length,
-            verification: { ok: true, issues: [], min_gap: m.spacing, max_fibre_deviation: 0 },
+            verification: { ok: true, issues: [], min_gap: m.spacing, max_fibre_deviation: 0, bad: [] },
           },
-          run: { seed: 1, solve_seconds: (Date.now() - start) / 1000, stopped },
+          run: { seed: 1, solve_seconds: (Date.now() - start) / 1000, stopped, edits: keep?.edits ?? 0, kept: keep?.placements.length ?? 0 },
           warnings: [],
           used_length: best.length,
           shapes,
           placements: best.placements,
           sections: [],
+          locked: keep ? keep.placements.map((_, i) => i) : [],
         };
+        editUndo = [];
+        editRedo = [];
         dirty = true;
         listeners.forEach((l) => l.done({ run: id, error: null, stopped }));
       };
       const timer = setInterval(() => {
         step++;
-        const next = fakeNest(plies, job, step);
+        const next = around(fakeNest(plies, job, step));
         if (next.length < best.length) best = next;
         const elapsed = (Date.now() - start) / 1000;
         listeners.forEach((l) => l.progress({ run: id, phase: elapsed < (total / 1000) * 0.8 ? "explore" : "compress", length: best.length, density: 0.7, elapsed, placements: best.placements, sections: null, section: null }));
@@ -368,6 +426,60 @@ export function createMockBackend(): Backend {
     onNest: async (on) => {
       listeners.push(on);
       return () => listeners.splice(listeners.indexOf(on), 1);
+    },
+    editResult: async (e: Edit) => {
+      const r = editable();
+      const pl = r.placements;
+      const idx = e.op === "rotate" ? [e.index] : e.indices;
+      if (!idx.length) throw "no ply selected";
+      if (idx.some((i) => i < 0 || i >= pl.length)) throw "there is no such ply in this nest";
+      const before = snap(r);
+      if (e.op === "lock") {
+        const set = new Set(r.locked);
+        for (const i of idx) e.on ? set.add(i) : set.delete(i);
+        r.locked = [...set].sort((a, b) => a - b);
+      } else {
+        const l = idx.find((i) => r.locked.includes(i));
+        if (l != null) throw `${pl[l].label} copy ${pl[l].copy} is locked; unlock it first`;
+        if (e.op === "move") {
+          if (!Number.isFinite(e.dx) || !Number.isFinite(e.dy)) throw "the move is not a valid distance";
+          for (const i of idx) {
+            pl[i].tx += e.dx;
+            pl[i].ty += e.dy;
+          }
+        } else {
+          const p = pl[e.index];
+          if (Math.abs(e.by / p.turn - Math.round(e.by / p.turn)) > 1e-9) throw `${p.label} cannot turn by ${e.by}°: its fibres would be off the roll direction`;
+          // Turn about the centre of its bounding box.
+          const [x0, y0, x1, y1] = boxOf(placedOutline(r.shapes, p));
+          const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+          const t = (e.by * Math.PI) / 180, c = Math.cos(t), s = Math.sin(t);
+          const ox = p.tx - cx, oy = p.ty - cy;
+          p.tx = cx + ox * c - oy * s;
+          p.ty = cy + ox * s + oy * c;
+          p.rotation = (((p.rotation + e.by) % 360) + 360) % 360;
+          p.fibre = normAxis(p.fibre + e.by);
+        }
+        r.run.edits++;
+        refit(r);
+      }
+      editUndo.push(before);
+      editRedo = [];
+      dirty = true;
+      return view();
+    },
+    undoEdit: async (redoIt: boolean) => {
+      const from = redoIt ? editRedo : editUndo;
+      if (!from.length) return view();
+      const r = editable();
+      const s = from.pop()!;
+      (redoIt ? editUndo : editRedo).push(snap(r));
+      r.placements = s.placements;
+      r.locked = s.locked;
+      r.run.edits = s.edits;
+      refit(r);
+      dirty = true;
+      return view();
     },
     exportResult: () => Promise.reject("exporting cut files needs the desktop app"),
     pickProjectToOpen: async () => null,

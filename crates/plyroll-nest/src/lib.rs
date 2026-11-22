@@ -319,6 +319,81 @@ pub fn nest_job(
     kits::merge(material, &parts)
 }
 
+/// Keeps the `locked` placements of a finished layout where they are and nests
+/// every other ply on the roll after them: from the far end of the last locked
+/// ply plus the spacing. Gaps between locked plies are not filled (the solver
+/// cannot work around fixed parts). Mixed layouts only.
+///
+/// The kept plies come first in the new layout, so they are placements
+/// `0..locked.len()`; they keep their copy numbers and the new plies get the
+/// remaining ones in roll order.
+pub fn nest_after_locked(
+    plies: &[PlyShape],
+    layout: &Layout,
+    locked: &[usize],
+    opts: &NestOptions,
+    mut on_progress: impl FnMut(&Progress),
+    cancel: Arc<AtomicBool>,
+) -> Result<Layout> {
+    let material = &layout.material;
+    ensure!(!locked.is_empty(), "no ply is locked");
+    ensure!(
+        layout.sections.is_empty(),
+        "re-nesting after locked plies works on mixed layouts only, and this nest is kit by kit; nest everything again instead"
+    );
+    for (k, &i) in locked.iter().enumerate() {
+        ensure!(i < layout.placements.len() && !locked[..k].contains(&i), "locked ply {i} is not in this nest");
+    }
+    let kept: Vec<Placement> = locked.iter().map(|&i| layout.placements[i].clone()).collect();
+    let kept_layout = Layout { material: material.clone(), placements: kept.clone(), used_length: 0.0, sections: vec![] };
+    let kept_end = placed_outlines(plies, &kept_layout, FlattenMode::Enclosing).iter().map(|o| o.bbox.max.x).fold(material.lead_trim, f64::max);
+    let start = kits::next_start(material, kept_end);
+
+    // What is left to cut: the ordered quantities less the kept copies.
+    let mut rest = plies.to_vec();
+    for (si, p) in rest.iter_mut().enumerate() {
+        for (vi, v) in p.variants.iter_mut().enumerate() {
+            let n = kept.iter().filter(|k| k.shape_idx == si && k.variant_idx == vi).count() as u32;
+            ensure!(n <= v.qty, "{} {:+}°: {n} copies locked, but only {} ordered", p.shape.name, v.angle_deg, v.qty);
+            v.qty -= n;
+        }
+    }
+    ensure!(rest.iter().any(|p| p.variants.iter().any(|v| v.qty > 0)), "every ply is locked, so there is nothing left to nest");
+
+    let merge = |new: &Layout| -> Layout {
+        let mut placements = kept.clone();
+        // New copies take the numbers the kept ones do not use, in roll order.
+        let mut fresh: Vec<Placement> = new.placements.clone();
+        fresh.sort_by(|a, b| (a.shape_idx, a.variant_idx).cmp(&(b.shape_idx, b.variant_idx)).then(a.copy.cmp(&b.copy)));
+        let mut last: Option<(usize, usize)> = None;
+        let mut free: Vec<u32> = Vec::new();
+        for mut pl in fresh {
+            if last != Some((pl.shape_idx, pl.variant_idx)) {
+                last = Some((pl.shape_idx, pl.variant_idx));
+                let used: Vec<u32> = kept.iter().filter(|k| (k.shape_idx, k.variant_idx) == (pl.shape_idx, pl.variant_idx)).map(|k| k.copy).collect();
+                let total = plies[pl.shape_idx].variants[pl.variant_idx].qty;
+                free = (1..=total).filter(|c| !used.contains(c)).rev().collect();
+            }
+            pl.copy = free.pop().unwrap_or(pl.copy);
+            placements.push(pl);
+        }
+        Layout { material: material.clone(), placements, used_length: new.used_length.max(kept_end), sections: vec![] }
+    };
+
+    let mat = kits::section_material(material, start);
+    let new = nest(
+        &rest,
+        &mat,
+        opts,
+        |p| {
+            let layout = p.layout.as_ref().map(&merge);
+            on_progress(&Progress { layout, length: p.length.max(kept_end), ..p.clone() });
+        },
+        cancel,
+    )?;
+    Ok(merge(&new))
+}
+
 /// Maps a solver solution back to ply placements in roll coordinates.
 fn map_solution(plies: &[PlyShape], material: &Material, groups: &[ItemGroup], solution: &SPSolution) -> Result<Layout> {
     let out = jagua_rs::probs::spp::io::export(solution, *sparrow::EPOCH);

@@ -2,7 +2,7 @@
 // implementation calls Rust commands; the mock lets the editor run in a
 // plain browser (npm run dev) with real demo data.
 
-import type { AppView, ImportReport, ImportSettings, JobSettings, LibraryView, Material, NestDone, NestProgress, NestStarted, RefPick, Roll, RollsView, SourceFile, Variant } from "./types";
+import type { AppView, Edit, ImportReport, ImportSettings, JobSettings, LibraryView, Material, NestDone, NestProgress, NestStarted, RefPick, Roll, RollsView, SourceFile, Variant } from "./types";
 
 export interface Backend {
   readonly kind: "tauri" | "mock";
@@ -41,9 +41,13 @@ export interface Backend {
   /** Puts the current nest's booking back on its roll. */
   unbookRoll(): Promise<RollsView>;
   // Nesting
-  startNest(): Promise<NestStarted>;
+  /** With `keepLocked`, the current result's locked plies stay and the rest is nested after them. */
+  startNest(keepLocked?: boolean): Promise<NestStarted>;
   stopNest(): Promise<void>;
   onNest(on: { progress: (p: NestProgress) => void; done: (d: NestDone) => void }): Promise<() => void>;
+  /** Moves, turns or locks plies of the current result (its own undo). */
+  editResult(edit: Edit): Promise<AppView>;
+  undoEdit(redo: boolean): Promise<AppView>;
   /** Writes the cut files of the current result; returns the paths. */
   exportResult(dir: string): Promise<string[]>;
   // Native dialogs

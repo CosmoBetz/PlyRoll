@@ -220,7 +220,22 @@ fn header(
         (shapes.to_string(), "Different shapes".into()),
         (if kits == 0 { "-".into() } else { kits.to_string() }, "Kits".into()),
         (format!("{:.3} m²", s.parts_area_m2), "Ply area".into()),
-        (time, if run.stopped { "Solve time (stopped early)".into() } else { "Solve time".into() }),
+        (
+            time,
+            {
+                let mut label = String::from("Solve time");
+                if run.stopped {
+                    label.push_str(" (stopped early)");
+                }
+                if run.kept > 0 {
+                    label.push_str(&format!(", after {} locked", run.kept));
+                }
+                if run.edits > 0 {
+                    label.push_str(&format!(", {} hand edit{}", run.edits, if run.edits == 1 { "" } else { "s" }));
+                }
+                label
+            },
+        ),
     ];
     let cw = BODY_W / 5.0;
     for (i, (value, label)) in cells.iter().enumerate() {
@@ -380,7 +395,7 @@ fn layout_strips(doc: &mut Doc, y: &mut f32, plies: &[PlyShape], layout: &Layout
         c.set_line_width(0.9);
         c.set_dash_pattern([2.0, 2.0], 0.0);
         for w2 in layout.sections.windows(2) {
-            let bx = ((w2[0].end + w2[1].start) / 2.0) as f32;
+            let bx = (w2[1].start - layout.material.spacing / 2.0) as f32;
             if bx > x0 && bx < x1 {
                 c.move_to(px(bx as f64), oy - 3.0);
                 c.line_to(px(bx as f64), oy + h + 3.0);

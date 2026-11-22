@@ -298,7 +298,7 @@ fn tile_page(c: &mut Content, plies: &[PlyShape], layout: &Layout, plan: &TilePl
     c.set_line_width(0.8);
     c.set_dash_pattern([4.0, 3.0], 0.0);
     for w2 in layout.sections.windows(2) {
-        let bx = (w2[0].end + w2[1].start) / 2.0;
+        let bx = w2[1].start - m.spacing / 2.0;
         c.move_to(px(bx), py(0.0));
         c.line_to(px(bx), py(m.roll_width));
     }

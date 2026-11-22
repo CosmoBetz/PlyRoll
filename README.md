@@ -3,7 +3,7 @@
 Free, local nesting for carbon-fibre prepreg plies on an endless roll.
 Every ply keeps its fibre direction (UD) or warp direction (twill); plies are never flipped.
 
-Status: **Phase 1 command-line tool; Phase 2 desktop app with orientation editor, material library, nesting and reports; Phase 3 started (kit-by-kit nesting, roll inventory, 1:1 printable templates).** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
+Status: **Phase 1 command-line tool; Phase 2 desktop app with orientation editor, material library, nesting and reports; Phase 3 started (kit-by-kit nesting, roll inventory, 1:1 printable templates, editing a nest by hand).** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
 Nesting is done by [sparrow](https://github.com/JeroenGar/sparrow) on top of
 [jagua-rs](https://github.com/JeroenGar/jagua-rs).
 
@@ -83,9 +83,23 @@ Nesting:
 4. The result is saved with the project. Changing plies, quantities, sets, material or layout marks it *out of date*
    (picking a roll or template paper does not).
    Export is then disabled until you nest again. Undo brings it back.
-5. **Export cut files…** writes the same files as the CLI (see [Output](#output)) to a folder you pick. Choose
+5. **Edit by hand** (optional). Click a ply to select it (⇧-click adds more). Drag it, or nudge it with the arrow
+   keys (1 mm, ⇧ 10 mm, ⌥ 0.1 mm). **R** turns it 180° (90° on twill with swappable warp and weft), and **[ ]** turn it
+   in steps within the material's fibre tolerance. So a turn can never put the fibres off the roll direction. **L**
+   locks plies so they cannot be moved by accident. While you drag, plies that come too close to another or leave the
+   usable roll turn red. After every change the whole layout is verified again on the exact geometry, the used length
+   and kit stretches are refitted, and the plies with problems are marked. Export needs a pass. ⌘Z / ⇧⌘Z undo and redo
+   layout edits in the Nest view. Edits are saved with the project and counted on the report (", n hand edits").
+   A booked nest cannot be edited until the booking is taken back. Kit by kit, a ply must stay in its kit's stretch;
+   each kit starts where the nest put it, so shortening one kit by hand does not pull the next one back.
+   With plies locked on a Mixed layout, **Nest the unlocked plies** keeps the locked plies where they are and nests
+   all the others on the roll after the far end of the last locked ply (gaps between or beside locked plies are not
+   filled). The report says "after n locked". **Nest everything again** replaces the whole layout, hand edits and locks
+   included, and asks first. Kit by kit, locked plies cannot be kept (switching the layout makes the nest out of date, which drops them too):
+   keeping them works on nests made with the Mixed layout.
+6. **Export cut files…** writes the same files as the CLI (see [Output](#output)) to a folder you pick. Choose
    **1:1 templates** (A4, A3, Letter or a plotter roll width) to also get `templates.pdf`.
-6. Once the job is cut, **Book … m on roll …** takes the used length off the roll in the inventory. Each nest can be
+7. Once the job is cut, **Book … m on roll …** takes the used length off the roll in the inventory. Each nest can be
    booked once, and **Take back** undoes it. To book a second cut of the same saved nest, nest again or correct the
    roll's length in **Manage rolls…**.
 
@@ -223,7 +237,9 @@ are ignored.
 
 ## Known limits
 
-- No manual editing of a layout, and no warm start from a previous result.
+- Re-nesting around locked plies only fills the roll after the last locked ply, not the space between or beside them:
+  that needs fixed obstacles in the solver, which sparrow does not support yet. It works on Mixed layouts only, and
+  only in the app (the CLI always nests everything). There is no warm start either.
 - Templates are of the whole layout; there are no single-ply templates.
 - Parts are not nested inside other parts' holes.
 - DXF table headers have no handles (a quirk of the `dxf` crate writer). ezdxf and PlyRoll read the files fine.

@@ -3,8 +3,15 @@
   // the roll, y across it, y up (one flip, as in the editor), so the drawing
   // face matches the cut file. Plies are coloured by ply angle and hatched
   // along their fibre direction on the roll.
+  //
+  // Editable (a finished nest): click selects a ply (⇧/⌘-click adds), dragging
+  // a ply moves the selection, dragging empty roll pans. While dragging, the
+  // moved plies turn red when they come too close to another or leave the
+  // usable roll (a hint from the display outlines; the backend checks exactly).
+  import { untrack } from "svelte";
   import type { LayoutSection, LayoutShapes, Placement, XY } from "./types";
   import { angleColor, fmtAngle, pathD } from "./geo";
+  import { clashes } from "./collide";
 
   let {
     shapes,
@@ -12,6 +19,13 @@
     usedLength,
     live = false,
     sections = [],
+    editable = false,
+    selected = [],
+    locked = [],
+    bad = [],
+    frameKey = "",
+    onselect,
+    onmove,
   }: {
     shapes: LayoutShapes;
     placements: Placement[];
@@ -20,6 +34,16 @@
     live?: boolean;
     /** Kit sections (kit by kit): a divider between kits and their names. */
     sections?: LayoutSection[];
+    /** Plies can be selected and dragged. */
+    editable?: boolean;
+    selected?: number[];
+    locked?: number[];
+    /** Plies named by the verification. */
+    bad?: number[];
+    /** The view keeps its scale while editing the same nest; a new key fits it again. */
+    frameKey?: string;
+    onselect?: (indices: number[]) => void;
+    onmove?: (indices: number[], dx: number, dy: number) => void;
   } = $props();
 
   let host = $state<HTMLDivElement>();
@@ -62,7 +86,21 @@
 
   /** Length shown: the used length, or how far the plies reach while running. */
   const extent = $derived(Math.max(usedLength ?? 0, m.lead_trim, ...placed.map((p) => p.bbox[2])) || m.roll_width);
-  const world = $derived({ x0: -m.roll_width * 0.03, x1: extent + m.roll_width * 0.12, y0: 0, y1: m.roll_width });
+  type World = { x0: number; x1: number; y0: number; y1: number };
+  const fitted = $derived<World>({ x0: -m.roll_width * 0.03, x1: extent + m.roll_width * 0.12, y0: 0, y1: m.roll_width });
+  // While editing, moving a ply must not rescale the view under the mouse.
+  let frozen = $state<World | null>(null);
+  let frozenFor: string | null = null;
+  $effect(() => {
+    if (!editable) {
+      frozen = null;
+      frozenFor = null;
+    } else if (frameKey !== frozenFor) {
+      frozenFor = frameKey;
+      frozen = untrack(() => fitted);
+    }
+  });
+  const world = $derived(editable && frozen ? frozen : fitted);
 
   const baseScale = $derived(Math.max((world.x1 - world.x0) / size.w, (world.y1 - world.y0) / (size.h - 40), 1e-6) / 0.96);
   const mmPerPx = $derived(baseScale / zoom);
@@ -88,34 +126,82 @@
     }
     return c;
   }
-  const hover = $derived.by(() => {
-    if (!mouse || dragging || live) return null;
-    const p = mouse;
-    return placed.find((q) => p[0] >= q.bbox[0] && p[0] <= q.bbox[2] && p[1] >= q.bbox[1] && p[1] <= q.bbox[3] && inside(p, q.pts)) ?? null;
-  });
+  // A drag of plies: which, how far (roll mm), and what the hint says.
+  let moving = $state<{ idx: number[]; dx: number; dy: number; bad: Set<number>; blocked: boolean } | null>(null);
+  /** Index of the ply under roll point p (topmost drawn last). */
+  function hitAt(p: XY): number | null {
+    for (let i = placed.length - 1; i >= 0; i--) {
+      const q = placed[i];
+      if (p[0] >= q.bbox[0] && p[0] <= q.bbox[2] && p[1] >= q.bbox[1] && p[1] <= q.bbox[3] && inside(p, q.pts)) return i;
+    }
+    return null;
+  }
+  const hoverIdx = $derived(!mouse || dragging || moving || live ? null : hitAt(mouse));
+  const hover = $derived(hoverIdx == null ? null : placed[hoverIdx]);
+  const selSet = $derived(new Set(selected));
+  const lockSet = $derived(new Set(locked));
+  const badSet = $derived(new Set(bad));
 
-  let press: { x: number; y: number; pan: XY } | null = null;
+  const movedSet = $derived(new Set(moving && !moving.blocked ? moving.idx : []));
+  let hintFrame = 0;
+  function hint() {
+    if (hintFrame) return;
+    hintFrame = requestAnimationFrame(() => {
+      hintFrame = 0;
+      if (moving && !moving.blocked) moving.bad = clashes(shapes, placements, moving.idx, moving.dx, moving.dy).bad;
+    });
+  }
+
+  let press: { x: number; y: number; pan: XY; start: XY; hit: number | null; add: boolean } | null = null;
   function onpointerdown(e: PointerEvent) {
     if (e.button !== 0 && e.button !== 1) return;
-    press = { x: e.clientX, y: e.clientY, pan: [...pan] as XY };
+    const start = toRoll(e.clientX, e.clientY);
+    const hit = editable && e.button === 0 ? hitAt(start) : null;
+    press = { x: e.clientX, y: e.clientY, pan: [...pan] as XY, start, hit, add: e.shiftKey || e.metaKey || e.ctrlKey };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
   function onpointermove(e: PointerEvent) {
     const r = host!.getBoundingClientRect();
     mouseScreen = [e.clientX - r.left, e.clientY - r.top];
     mouse = toRoll(e.clientX, e.clientY);
-    if (press) {
-      const dx = e.clientX - press.x, dy = e.clientY - press.y;
-      if (dragging || Math.hypot(dx, dy) > 4) {
-        dragging = true;
-        pan = [press.pan[0] - dx * mmPerPx, press.pan[1] + dy * mmPerPx];
+    if (!press) return;
+    const dx = e.clientX - press.x, dy = e.clientY - press.y;
+    if (!dragging && !moving && Math.hypot(dx, dy) <= 4) return;
+    if (press.hit != null) {
+      if (!moving) {
+        // Dragging a selected ply moves the whole selection; another ply moves alone.
+        const idx = selSet.has(press.hit) ? [...selected] : press.add ? [...selected, press.hit] : [press.hit];
+        moving = { idx, dx: 0, dy: 0, bad: new Set(), blocked: idx.some((i) => lockSet.has(i)) };
       }
+      moving.dx = mouse[0] - press.start[0];
+      moving.dy = mouse[1] - press.start[1];
+      hint();
+    } else {
+      dragging = true;
+      pan = [press.pan[0] - dx * mmPerPx, press.pan[1] + dy * mmPerPx];
     }
   }
+  const round = (v: number) => Math.round(v * 10) / 10;
   function onpointerup() {
+    const p = press, mv = moving;
     press = null;
     dragging = false;
+    moving = null;
+    if (!p) return;
+    if (mv) {
+      if (!mv.blocked && (round(mv.dx) !== 0 || round(mv.dy) !== 0)) {
+        if (!mv.idx.every((i) => selSet.has(i)) || mv.idx.length !== selected.length) onselect?.(mv.idx);
+        onmove?.(mv.idx, round(mv.dx), round(mv.dy));
+      }
+      return;
+    }
+    if (!editable || dragged(p)) return;
+    // A click.
+    if (p.hit == null) onselect?.(p.add ? selected : []);
+    else if (p.add) onselect?.(selSet.has(p.hit) ? selected.filter((i) => i !== p.hit) : [...selected, p.hit]);
+    else onselect?.([p.hit]);
   }
+  const dragged = (p: { pan: XY }) => p.pan[0] !== pan[0] || p.pan[1] !== pan[1];
   function onwheel(e: WheelEvent) {
     e.preventDefault();
     // Horizontal trackpad scrolling pans along the roll.
@@ -134,6 +220,7 @@
   export function fit() {
     zoom = 1;
     pan = [0, 0];
+    if (editable) frozen = fitted;
   }
 
   /** Fibre lines along `deg` through a placed ply's bbox, `gap` apart (roll mm). */
@@ -178,6 +265,8 @@
   class="roll"
   class:dragging
   class:live
+  class:can-move={editable && hover != null}
+  class:moving={moving != null}
   bind:this={host}
   role="img"
   aria-label="Nested plies on the roll"
@@ -202,12 +291,22 @@
       <rect x={0} y={m.roll_width - m.edge_trim} width={rollEnd} height={m.edge_trim} class="trim" />
       <rect x={0} y={0} width={m.lead_trim} height={m.roll_width} class="trim" />
       {#each placed as q, i}
-        <path d={pathD(q.pts) + q.holes.map((h) => pathD(h)).join("")} fill={q.color} class="ply" class:hot={hover === q} fill-rule="evenodd" />
-        {#if showHatch}
-          <path d={hatch(q, q.pl.fibre, gap)} stroke={q.color} clip-path="url(#roll-clip-{i})" class="hatch" />
-        {/if}
-        <path d={pathD(q.pts)} class="edge" stroke={q.color} />
-        {#each q.holes as h}<path d={pathD(h)} class="edge" stroke={q.color} />{/each}
+        {@const mv = movedSet.has(i)}
+        {@const red = mv ? moving!.bad.has(i) : badSet.has(i) || (moving != null && moving.bad.has(i))}
+        <g
+          transform={mv ? `translate(${moving!.dx} ${moving!.dy})` : undefined}
+          class:sel={selSet.has(i)}
+          class:locked={lockSet.has(i)}
+          class:bad={red}
+          class:moving={mv}
+        >
+          <path d={pathD(q.pts) + q.holes.map((h) => pathD(h)).join("")} fill={red ? "var(--bad)" : q.color} class="ply" class:hot={hover === q} fill-rule="evenodd" />
+          {#if showHatch}
+            <path d={hatch(q, q.pl.fibre, gap)} stroke={q.color} clip-path="url(#roll-clip-{i})" class="hatch" />
+          {/if}
+          <path d={pathD(q.pts)} class="edge" stroke={red ? "var(--bad)" : q.color} />
+          {#each q.holes as h}<path d={pathD(h)} class="edge" stroke={red ? "var(--bad)" : q.color} />{/each}
+        </g>
       {/each}
     </g>
   </svg>
@@ -216,10 +315,17 @@
     {#each labels as l (l.q)}
       <text x={l.x} y={l.y} class="label">{l.q.pl.label}</text>
     {/each}
+    {#each locked as i (i)}
+      {#if placed[i]}
+        {@const c = toScreen([(placed[i].bbox[0] + placed[i].bbox[2]) / 2, placed[i].bbox[3]])}
+        <text x={c[0]} y={c[1] + 12} class="lock-mark">🔒</text>
+      {/if}
+    {/each}
     {#each sections as s, i (i)}
       {@const x = toScreen([s.start, 0])[0]}
       {#if i > 0}
-        <line x1={x - (s.start - sections[i - 1].end) / 2 / mmPerPx} y1={toScreen([0, m.roll_width + 30 * mmPerPx])[1]} x2={x - (s.start - sections[i - 1].end) / 2 / mmPerPx} y2={toScreen([0, -12 * mmPerPx])[1]} class="kit-line" />
+        <!-- Half the spacing before the kit's start, where the nest put the cross-cut; hand edits do not move it. -->
+        <line x1={x - m.spacing / 2 / mmPerPx} y1={toScreen([0, m.roll_width + 30 * mmPerPx])[1]} x2={x - m.spacing / 2 / mmPerPx} y2={toScreen([0, -12 * mmPerPx])[1]} class="kit-line" />
       {/if}
       <text x={x + 4} y={toScreen([0, m.roll_width])[1] - 8} class="kit-label">{s.kit ?? "no kit"}</text>
     {/each}
@@ -240,11 +346,19 @@
     </g>
   </svg>
 
-  {#if hover}
+  {#if moving && moving.blocked}
+    <div class="tip" style="left:{mouseScreen[0] + 14}px; top:{mouseScreen[1] + 14}px">Locked: unlock (L) to move</div>
+  {:else if moving}
+    <div class="tip" style="left:{mouseScreen[0] + 14}px; top:{mouseScreen[1] + 14}px">
+      {moving.dx >= 0 ? "+" : ""}{round(moving.dx).toFixed(1)} mm along · {moving.dy >= 0 ? "+" : ""}{round(moving.dy).toFixed(1)} mm across
+      {#if moving.bad.size}<br /><span class="bad-text">too close or off the roll</span>{/if}
+    </div>
+  {:else if hover}
     <div class="tip" style="left:{mouseScreen[0] + 14}px; top:{mouseScreen[1] + 14}px">
       <b>{hover.pl.label}</b> · copy {hover.pl.copy}
       {#if hover.pl.kit}<br />kit {hover.pl.kit}{/if}
       <br /><span class="muted">turned {fmtAngle(hover.pl.rotation)} · fibre {fmtAngle(hover.pl.fibre)} on the roll</span>
+      {#if editable}<br /><span class="muted">{lockSet.has(hoverIdx!) ? "locked: L unlocks" : "click selects · drag moves"}</span>{/if}
     </div>
   {/if}
 </div>
@@ -260,6 +374,35 @@
   }
   .roll.dragging {
     cursor: grabbing;
+  }
+  .roll.can-move {
+    cursor: pointer;
+  }
+  .roll.moving {
+    cursor: move;
+  }
+  .sel .ply {
+    fill-opacity: 0.42;
+  }
+  .sel .edge {
+    stroke-width: 2.6;
+  }
+  .locked .edge {
+    stroke-dasharray: 5 3;
+  }
+  .bad .ply {
+    fill-opacity: 0.35;
+  }
+  .moving .ply {
+    fill-opacity: 0.3;
+  }
+  .lock-mark {
+    font-size: 11px;
+    text-anchor: middle;
+  }
+  .bad-text {
+    color: var(--bad);
+    font-weight: 600;
   }
   svg {
     position: absolute;

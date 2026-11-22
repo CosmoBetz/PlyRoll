@@ -20,6 +20,9 @@ pub struct VerifyReport {
     pub min_gap: Option<f64>,
     /// Largest fibre deviation from the roll direction, degrees.
     pub max_fibre_deviation: f64,
+    /// Placements named in an issue (indices into the layout, sorted).
+    #[serde(default)]
+    pub bad: Vec<usize>,
 }
 
 pub struct PlacedOutline {
@@ -48,6 +51,7 @@ fn to_geo(pts: &[Pt]) -> Polygon<f64> {
 pub fn verify(plies: &[PlyShape], layout: &Layout) -> VerifyReport {
     let m = &layout.material;
     let mut issues = Vec::new();
+    let mut bad = Vec::new();
 
     // 1. Quantities.
     for (si, ply) in plies.iter().enumerate() {
@@ -61,20 +65,21 @@ pub fn verify(plies: &[PlyShape], layout: &Layout) -> VerifyReport {
 
     // 2. Fibre orientation (no mirroring is possible: placements only rotate and translate).
     let mut max_dev: f64 = 0.0;
-    for pl in &layout.placements {
+    for (i, pl) in layout.placements.iter().enumerate() {
         let ply = &plies[pl.shape_idx];
         let fibre = ply.fibre_deg(&ply.variants[pl.variant_idx]);
         let dev = fibre_deviation(fibre, pl.rotation_deg, m, ply.cosmetic);
         max_dev = max_dev.max(dev);
         if !fibre_ok(fibre, pl.rotation_deg, m, ply.cosmetic) {
             issues.push(format!("{} {:+}° copy {}: fibres {:.2}° off the roll direction", ply.shape.name, ply.variants[pl.variant_idx].angle_deg, pl.copy, dev));
+            bad.push(i);
         }
     }
 
     // 3. Inside the usable roll area. Enclosing outlines are conservative.
     let enclosing = placed_outlines(plies, layout, FlattenMode::Enclosing);
     let (y_min, y_max) = (m.edge_trim, m.roll_width - m.edge_trim);
-    for (pl, o) in layout.placements.iter().zip(&enclosing) {
+    for (i, (pl, o)) in layout.placements.iter().zip(&enclosing).enumerate() {
         let b = o.bbox;
         if b.min.x < m.lead_trim - EPS || b.min.y < y_min - EPS || b.max.y > y_max + EPS || b.max.x > layout.used_length + EPS {
             let ply = &plies[pl.shape_idx];
@@ -82,10 +87,38 @@ pub fn verify(plies: &[PlyShape], layout: &Layout) -> VerifyReport {
                 "{} copy {} leaves the usable roll area (x {:.2}..{:.2}, y {:.2}..{:.2})",
                 ply.shape.name, pl.copy, b.min.x, b.max.x, b.min.y, b.max.y
             ));
+            bad.push(i);
         }
     }
 
-    // 4. Spacing between parts.
+    // 4. Kit by kit: every ply inside its kit's stretch of roll.
+    if !layout.sections.is_empty() {
+        for (i, (pl, o)) in layout.placements.iter().zip(&enclosing).enumerate() {
+            let ply = &plies[pl.shape_idx];
+            let kit = &ply.variants[pl.variant_idx].kit;
+            let kit_name = kit.as_deref().unwrap_or("no kit");
+            let k = layout.sections.iter().position(|s| &s.kit == kit);
+            match k.map(|k| (&layout.sections[k], layout.sections.get(k + 1))) {
+                Some((s, next)) => {
+                    // A kit's stretch ends where the next one starts, less the spacing.
+                    let limit = next.map_or(s.end, |n| n.start - m.spacing);
+                    if o.bbox.min.x < s.start - EPS || o.bbox.max.x > limit + EPS {
+                        issues.push(format!(
+                            "{} copy {} ({kit_name}) is outside its kit's stretch of roll ({:.1}..{:.1} mm)",
+                            ply.shape.name, pl.copy, s.start, limit
+                        ));
+                        bad.push(i);
+                    }
+                }
+                None => {
+                    issues.push(format!("{} copy {} ({kit_name}) has no kit section on the roll", ply.shape.name, pl.copy));
+                    bad.push(i);
+                }
+            }
+        }
+    }
+
+    // 5. Spacing between parts.
     let inscribed = placed_outlines(plies, layout, FlattenMode::Inscribed);
     let geos: Vec<Polygon<f64>> = inscribed.iter().map(|o| to_geo(&o.poly)).collect();
     let mut order: Vec<usize> = (0..inscribed.len()).collect();
@@ -108,12 +141,15 @@ pub fn verify(plies: &[PlyShape], layout: &Layout) -> VerifyReport {
                     "{} copy {} and {} copy {} are {:.3} mm apart (need {:.3} mm)",
                     plies[a.shape_idx].shape.name, a.copy, plies[b.shape_idx].shape.name, b.copy, d, m.spacing
                 ));
+                bad.extend([i, j]);
             }
         }
     }
     // geo reports 0 for overlapping polygons, so overlaps are caught above.
 
-    VerifyReport { ok: issues.is_empty(), issues, min_gap, max_fibre_deviation: max_dev }
+    bad.sort_unstable();
+    bad.dedup();
+    VerifyReport { ok: issues.is_empty(), issues, min_gap, max_fibre_deviation: max_dev, bad }
 }
 
 #[cfg(test)]

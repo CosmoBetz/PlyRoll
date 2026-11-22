@@ -330,7 +330,7 @@ fn run() -> Result<i32> {
                 },
                 cancel,
             )?;
-            let run = RunInfo { seed, solve_seconds: start.elapsed().as_secs_f64(), stopped: stopped.load(Ordering::SeqCst) };
+            let run = RunInfo { seed, solve_seconds: start.elapsed().as_secs_f64(), stopped: stopped.load(Ordering::SeqCst), edits: 0, kept: 0 };
             let (meta, opts) = out_options(&job.job, &extra, saved.as_ref(), &material, "")?;
             finish(&job.out, &plies, &layout, &warnings, &run, meta, &opts)
         }

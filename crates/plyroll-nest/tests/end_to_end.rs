@@ -12,7 +12,7 @@ use plyroll_core::orient::fibre_ok;
 use plyroll_core::verify::verify;
 use plyroll_core::kits::Grouping;
 use plyroll_core::report::cut_plies;
-use plyroll_nest::{NestOptions, build_groups, nest, nest_job};
+use plyroll_nest::{NestOptions, build_groups, nest, nest_after_locked, nest_job};
 
 fn shape(name: &str, outer: Path, holes: Vec<Path>) -> Shape {
     Shape { name: name.into(), source_file: format!("{name}.dxf").into(), outer, holes, marks: vec![], layer_ref_deg: None, mirrored_on_import: false }
@@ -208,6 +208,25 @@ fn kit_by_kit_cuts_each_kit_together() {
         assert!(c.x_mm >= s.start - 1e-6 && c.x_mm <= s.end, "{} at {} outside {s:?}", c.label, c.x_mm);
     }
 
+    // Refitting an untouched layout changes nothing; a ply moved into the next
+    // kit's stretch of roll fails verification.
+    let mut refit = layout.clone();
+    plyroll_core::edit::refit(&plies, &mut refit);
+    for (a, b) in refit.sections.iter().zip(&layout.sections) {
+        assert!((a.start - b.start).abs() < 1e-9 && (a.end - b.end).abs() < 1e-9, "{a:?} vs {b:?}");
+    }
+    assert!((refit.used_length - layout.used_length).abs() < 1e-9);
+    let first_b = layout.placements.iter().position(|p| plies[p.shape_idx].variants[p.variant_idx].kit.as_deref() == Some("B")).unwrap();
+    let mut moved = layout.clone();
+    let mut locked = vec![];
+    let dx = layout.sections[1].start + 5.0 - layout.sections[0].start;
+    plyroll_core::edit::apply(&plies, &mut moved, &mut locked, &plyroll_core::edit::Edit::Move { indices: vec![first_b], dx, dy: 0.0 }).unwrap();
+    let r = verify(&plies, &moved);
+    assert!(!r.ok && r.bad.contains(&first_b), "{:?}", r.issues);
+    assert!(r.issues.iter().filter(|i| i.contains("stretch")).count() == 1, "only the moved ply is outside its kit: {:?}", r.issues);
+    assert_eq!(moved.sections[1].start, layout.sections[1].start, "kit starts stay put");
+    assert!(r.issues.iter().any(|i| i.contains("outside its kit's stretch")), "{:?}", r.issues);
+
     // Live layouts grow kit by kit and are always valid placements of the full list.
     assert!(!live.is_empty());
     for l in &live {
@@ -245,4 +264,52 @@ fn stopping_kit_by_kit_still_gives_every_kit() {
     assert!(r.ok, "{:?}", r.issues);
     assert_eq!(layout.placements.len(), 14);
     assert_eq!(layout.sections.len(), 3);
+}
+
+#[test]
+fn renest_after_locked_keeps_them_and_nests_the_rest_behind() {
+    let plies = plies();
+    let mat = material(MaterialKind::Ud, false);
+    let layout = nest(&plies, &mat, &opts(), |_| {}, Arc::new(AtomicBool::new(false))).expect("nest");
+    // Lock the three plies nearest the roll start.
+    let mut order: Vec<usize> = (0..layout.placements.len()).collect();
+    order.sort_by(|&a, &b| layout.placements[a].tx.total_cmp(&layout.placements[b].tx));
+    let locked = vec![order[2], order[0], order[1]];
+    let mut live = Vec::new();
+    let o = NestOptions { live_layout: Some(Duration::ZERO), ..opts() };
+    let out = nest_after_locked(&plies, &layout, &locked, &o, |p| live.extend(p.layout.clone()), Arc::new(AtomicBool::new(false))).expect("re-nest");
+
+    let r = verify(&plies, &out);
+    assert!(r.ok, "{:?}", r.issues);
+    assert_eq!(out.placements.len(), layout.placements.len());
+    // The locked plies are kept exactly and come first.
+    for (k, &i) in locked.iter().enumerate() {
+        assert_eq!(out.placements[k], layout.placements[i]);
+    }
+    // Everything else starts after the last locked ply plus the spacing.
+    let outlines = plyroll_core::verify::placed_outlines(&plies, &out, plyroll_core::geom::FlattenMode::Enclosing);
+    let kept_end = outlines[..3].iter().map(|o| o.bbox.max.x).fold(0.0, f64::max);
+    for o in &outlines[3..] {
+        assert!(o.bbox.min.x >= kept_end + mat.spacing - 0.05, "{} before {}", o.bbox.min.x, kept_end + mat.spacing);
+    }
+    // Copy numbers per variant are 1..qty, each once.
+    for (si, p) in plies.iter().enumerate() {
+        for (vi, v) in p.variants.iter().enumerate() {
+            let mut c: Vec<u32> = out.placements.iter().filter(|x| x.shape_idx == si && x.variant_idx == vi).map(|x| x.copy).collect();
+            c.sort_unstable();
+            assert_eq!(c, (1..=v.qty).collect::<Vec<_>>(), "{} {:+}°", p.shape.name, v.angle_deg);
+        }
+    }
+    // Live layouts include the locked plies.
+    assert!(!live.is_empty() && live.iter().all(|l| l.placements.len() == out.placements.len() && l.placements[..3] == out.placements[..3]));
+
+    // Refused: nothing locked, everything locked, kit by kit.
+    let none = Arc::new(AtomicBool::new(false));
+    assert!(nest_after_locked(&plies, &layout, &[], &opts(), |_| {}, none.clone()).is_err());
+    let all: Vec<usize> = (0..layout.placements.len()).collect();
+    let e = nest_after_locked(&plies, &layout, &all, &opts(), |_| {}, none.clone()).unwrap_err().to_string();
+    assert!(e.contains("nothing left"), "{e}");
+    let kitted_layout = nest_job(&kitted(), &mat, Grouping::ByKit, &opts(), |_| {}, none.clone()).unwrap();
+    let e = nest_after_locked(&kitted(), &kitted_layout, &[0], &opts(), |_| {}, none).unwrap_err().to_string();
+    assert!(e.contains("mixed layouts only"), "{e}");
 }

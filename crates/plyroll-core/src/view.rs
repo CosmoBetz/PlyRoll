@@ -121,6 +121,9 @@ pub struct PlacementView {
     /// Fibre (or warp) direction on the roll, degrees from the roll axis, (−90, 90].
     pub fibre: f64,
     pub label: String,
+    /// Smallest turn that keeps the fibres along the roll (180°, or 90° for
+    /// twill with interchangeable warp and weft), degrees.
+    pub turn: f64,
 }
 
 /// The parts of a nest that do not change while it runs.
@@ -159,6 +162,7 @@ pub fn placement_views(plies: &[crate::model::PlyShape], layout: &crate::model::
                 ty: pl.ty,
                 fibre: crate::project::norm_axis(p.fibre_deg(v) + pl.rotation_deg),
                 label: crate::export::label_text(p, pl),
+                turn: crate::orient::period(&layout.material, p.cosmetic),
             }
         })
         .collect()
@@ -179,6 +183,8 @@ pub struct ResultView {
     pub sections: Vec<crate::kits::LayoutSection>,
     /// Identifies this nest in roll bookings (`rolls::result_key`).
     pub key: String,
+    /// Placements locked against hand edits.
+    pub locked: Vec<usize>,
 }
 
 pub fn result_view(project: &Project, r: &crate::project::NestResult) -> ResultView {
@@ -194,5 +200,6 @@ pub fn result_view(project: &Project, r: &crate::project::NestResult) -> ResultV
         placements: placement_views(&r.plies, &r.layout),
         sections: r.layout.sections.clone(),
         key: crate::rolls::result_key(&r.fingerprint, r.run.seed),
+        locked: r.locked.clone(),
     }
 }

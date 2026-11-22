@@ -36,7 +36,7 @@ export const tauriBackend: Backend = {
   deleteRoll: (id) => invoke<RollsView>("delete_roll", { id }),
   bookRoll: () => invoke<RollsView>("book_roll"),
   unbookRoll: () => invoke<RollsView>("unbook_roll"),
-  startNest: () => invoke<NestStarted>("start_nest"),
+  startNest: (keepLocked = false) => invoke<NestStarted>("start_nest", { keepLocked }),
   stopNest: () => invoke<void>("stop_nest"),
   async onNest(on) {
     const a = await listen<NestProgress>("nest-progress", (e) => on.progress(e.payload));
@@ -46,6 +46,8 @@ export const tauriBackend: Backend = {
       b();
     };
   },
+  editResult: (edit) => invoke<AppView>("edit_result", { edit }),
+  undoEdit: (redo) => invoke<AppView>("undo_edit", { redo }),
   exportResult: (dir) => invoke<string[]>("export_result", { dir }),
 
   async pickProjectToOpen() {

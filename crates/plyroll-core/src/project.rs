@@ -270,12 +270,15 @@ pub struct NestResult {
     pub run: RunInfo,
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// Placements locked against hand edits (indices into `layout.placements`, sorted).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locked: Vec<usize>,
 }
 
 impl NestResult {
     pub fn new(input: NestInput, layout: Layout, run: RunInfo) -> Self {
         let summary = crate::report::summarize(&input.plies, &layout);
-        NestResult { fingerprint: input.fingerprint, plies: input.plies, ply_ids: input.ply_ids, layout, summary, run, warnings: input.warnings }
+        NestResult { fingerprint: input.fingerprint, plies: input.plies, ply_ids: input.ply_ids, layout, summary, run, warnings: input.warnings, locked: vec![] }
     }
 }
 
