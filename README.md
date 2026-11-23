@@ -3,9 +3,33 @@
 Free, local nesting for carbon-fibre prepreg plies on an endless roll.
 Every ply keeps its fibre direction (UD) or warp direction (twill); plies are never flipped.
 
-Status: **Phase 1 command-line tool; Phase 2 desktop app with orientation editor, material library, nesting and reports; Phase 3 under way (kit-by-kit nesting, roll inventory, 1:1 printable templates, editing a nest by hand, re-nesting after locked plies, splitting plies wider than the roll, ply drawings).** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
+Status: **version 1.0.** A desktop app and a command-line tool: orientation editor, material library and roll
+inventory, nesting (mixed or kit by kit, with plies inside holes and splits for plies wider than the roll), editing a
+nest by hand, cut files, reports, labels, 1:1 templates and ply drawings. See [docs/PLAN.md](docs/PLAN.md) for the plan.
 Nesting is done by [sparrow](https://github.com/JeroenGar/sparrow) on top of
 [jagua-rs](https://github.com/JeroenGar/jagua-rs).
+
+## Download
+
+Get the desktop app and the command-line tool from [Releases](https://github.com/CosmoBetz/PlyRoll/releases):
+
+| system | desktop app | command-line tool |
+|---|---|---|
+| macOS, Apple silicon | `PlyRoll_<version>_aarch64.dmg` | `plyroll-cli-aarch64-apple-darwin.tar.gz` |
+| macOS, Intel | `PlyRoll_<version>_x64.dmg` | `plyroll-cli-x86_64-apple-darwin.tar.gz` |
+| Windows | `PlyRoll_<version>_x64-setup.exe` or `.msi` | `plyroll-cli-x86_64-pc-windows-msvc.zip` |
+| Linux | `.AppImage`, `.deb` or `.rpm` | `plyroll-cli-x86_64-unknown-linux-gnu.tar.gz` |
+
+The apps are not signed with a paid certificate, so the system warns the first time:
+
+- **macOS:** open the app once and close the warning, then go to System Settings → Privacy & Security and click
+  **Open Anyway**.
+- **Windows:** on "Windows protected your PC", click **More info**, then **Run anyway**.
+
+To try it, download `plyroll-demo.zip` as well. Open `demo.plyroll`, then in **Manage materials…** use **Import…** to
+add the demo's `materials.toml`.
+
+Questions, bugs and ideas are welcome as [issues](https://github.com/CosmoBetz/PlyRoll/issues).
 
 ## Build
 

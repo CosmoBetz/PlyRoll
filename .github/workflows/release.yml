@@ -1,0 +1,125 @@
+# Builds the desktop app and the CLI for macOS, Windows and Linux.
+# A pushed tag (v1.2.3) makes a draft release with all files; publish it by hand.
+# Run by hand (workflow_dispatch), it only uploads the files as workflow artifacts.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+      - run: cargo test --workspace --release
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: ''
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: ''
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Linux packages
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Frontend packages
+        working-directory: app
+        run: npm ci
+
+      - name: Desktop app
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: app
+          tagName: ${{ env.TAG }}
+          releaseName: ${{ env.TAG && format('PlyRoll {0}', env.TAG) || '' }}
+          releaseBody: 'Downloads are below. See the README for how to open the app the first time.'
+          releaseDraft: true
+          prerelease: false
+          uploadWorkflowArtifacts: true
+          args: ${{ matrix.args }}
+
+      - name: Command-line tool
+        shell: bash
+        run: |
+          cargo build --release -p plyroll-cli --target ${{ matrix.target }}
+          mkdir -p dist-cli
+          name="plyroll-cli-${{ matrix.target }}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/${{ matrix.target }}/release/plyroll.exe dist-cli/
+            (cd dist-cli && 7z a "../$name.zip" plyroll.exe)
+            echo "CLI_FILE=$name.zip" >> "$GITHUB_ENV"
+          else
+            cp target/${{ matrix.target }}/release/plyroll dist-cli/
+            tar -czf "$name.tar.gz" -C dist-cli plyroll
+            echo "CLI_FILE=$name.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plyroll-cli-${{ matrix.target }}
+          path: ${{ env.CLI_FILE }}
+
+      - name: Add the CLI to the release
+        if: env.TAG != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" "$CLI_FILE" --clobber
+
+  demo:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Add the demo job to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          (cd examples && zip -r ../plyroll-demo.zip demo)
+          gh release upload "$TAG" plyroll-demo.zip --clobber

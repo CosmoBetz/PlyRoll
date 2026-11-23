@@ -3045,7 +3045,7 @@ dependencies = [
 
 [[package]]
 name = "plyroll-app"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "plyroll-core",
@@ -3059,7 +3059,7 @@ dependencies = [
 
 [[package]]
 name = "plyroll-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3073,7 +3073,7 @@ dependencies = [
 
 [[package]]
 name = "plyroll-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "csv",
@@ -3090,7 +3090,7 @@ dependencies = [
 
 [[package]]
 name = "plyroll-nest"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "geo",
