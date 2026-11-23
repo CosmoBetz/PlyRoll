@@ -1,6 +1,12 @@
 # PlyRoll — plan for a free, local 2D nesting tool for prepreg plies
 
-Status: revised 2026-11-22. **Phase 1 (CLI) is built. Phase 2 has the orientation editor, material library, job settings, live nesting, saved results, cut-file export, reports and import settings. Phase 3 has kit-by-kit nesting, roll inventory, 1:1 tiled templates, hand editing of a nest, splitting plies that are wider than the roll and filling holes with other plies. Cutter formats (HPGL, G-code, cut sequencing) are deferred: the cutting shop's own software makes the NC code from the DXF.** See the README for usage.
+Status: revised 2026-11-22. **Phase 1 (CLI) is built. Phase 2 has the orientation editor, material library, job settings, live nesting, saved results, cut-file export, reports and import settings. Phase 3 has kit-by-kit nesting, roll inventory, 1:1 tiled templates, hand editing of a nest, splitting plies that are wider than the roll, filling holes with other plies and DXF ply drawings for the plybook. Cutter formats (HPGL, G-code, cut sequencing) are deferred: the cutting shop's own software makes the NC code from the DXF.** See the README for usage.
+
+**Phase 3, ply drawings for the plybook (§5.6):**
+- **What:** a DXF of every ply at every angle it is cut at (one per shape and angle; copies and kits add none, a split ply comes as its pieces), with the `CUT`, `MARK` and `LABEL` layers of layout.dxf, the fibre line and a caption (`rib +45°`).
+- **Choices:** *as cut* (turned so the fibre runs along x, moved to the origin; a mirrored drawing stays mirrored, as it is cut) or *as drawn* (CAD coordinates, fibre line at the ply angle; a drawing mirrored on import is mirrored back). Files: one per ply in `ply-drawings/<ply>_<angle>.dxf` (file-safe, unique names) or all in rows in `ply-drawings.dxf`. Saved in the project as `job.ply_drawings`; the CLI has `--ply-drawings` and `--ply-drawing-files`; the app has two switches above Export.
+- **Export:** written only after verification passes, like the other cut files. Old drawings are removed on every export, so the folder never holds plies of another job, and switching between one file and a folder removes the other.
+- **Checked:** core tests (turn and origin as cut, CAD coordinates and fibre as drawn for a plain and a mirrored ply, one drawing per angle, safe unique names, export and re-import: same area, one hole, the fibre line as a mark; one file with 3 parts; old files removed; a split ply gives one drawing per piece, the pieces adding up to the ply). CLI on the demo: 19 files per ply, then one file, then back; `plyroll export` follows the project's choice and `--ply-drawings off` removes the old file. The demo on a 250 mm roll with `--auto-split`: 26 drawings, the pieces named `rib_1_2_+45` and so on. Rendered both layouts and checked the fibre lines. Browser preview: the switches, the hint, Off hiding the file choice. Desktop app: the switches, saved and reopened with the project, exported both ways; the export message names the folder once, not every drawing.
 
 **Phase 3, editing a nest by hand (§5.5):**
 - **Edits:** `edit::Edit` is move (one or more plies, roll mm), rotate (one ply, about its bounding-box centre, only to a rotation `allowed_rotations` gives, so the fibre check cannot fail through an edit), and lock/unlock. Locked plies refuse moves and turns. `NestResult::edit` applies an edit, refits the used length (far end of the last ply) and the kit sections' ends, and verifies the whole layout again. A refused edit changes nothing.
@@ -315,6 +321,7 @@ Output layers or channels: `CUT`, `MARK` (pen/inkjet: ply ID and fibre arrow), `
   - P1: HPGL/PLT (used by many plotters and knife tables), and G-code through **post-processor templates**. A machine profile is a TOML file plus a text template, so a machine can be added without changing code.
   - P2: vendor-specific formats (Zünd, Gerber, Lectra, Eastman…), only for machines someone actually needs.
 - **Hand-cutting support (P1):** 1:1 PDF templates tiled to A4/A3 or plotter roll width, with alignment marks.
+- **Ply drawings (P1):** every ply at every angle as a DXF for the plybook, as cut or as drawn (done, see Phase 3).
 - **Projector mode (P2):** a full-screen, calibrated 1:1 projection of the layout onto the cutting table for manual cutting.
 
 ### 5.7 Reports — P1

@@ -141,6 +141,14 @@ export interface JobSettings {
   roll?: string | null;
   /** Also export templates.pdf on this paper (absent = no templates). */
   templates?: Paper | null;
+  /** Also export a DXF of every ply at every angle, for the plybook (absent = none). */
+  ply_drawings?: PlyDrawings | null;
+}
+
+/** Ply drawings (plyroll-core drawings.rs): turned as cut (fibre along x) or as drawn in CAD; one file per ply or one file. */
+export interface PlyDrawings {
+  turn: "as-cut" | "as-drawn";
+  files: "per-ply" | "one-file";
 }
 
 /** One nest booked on a roll (plyroll-core rolls.rs). */

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AppView, Edit, Grouping, JobSettings, LibraryView, LiveNest as Live, Material, Paper, Roll, RollsView } from "./types";
+  import type { AppView, Edit, Grouping, JobSettings, LibraryView, LiveNest as Live, Material, Paper, PlyDrawings, Roll, RollsView } from "./types";
   import RollView from "./RollView.svelte";
 
   let {
@@ -103,6 +103,12 @@
   }
   function setPlotterWidth(w: number) {
     if (Number.isFinite(w) && w >= 100 && w <= 5000 && !(paper?.kind === "roll" && paper.width_mm === w)) onjob({ ...job, templates: { kind: "roll", width_mm: w } });
+  }
+  // ---- ply drawings for the plybook
+  const drawings = $derived(job.ply_drawings ?? null);
+  function setDrawings(d: Partial<PlyDrawings> | null) {
+    const next: PlyDrawings | null = d ? { turn: "as-cut", files: "per-ply", ...drawings, ...d } : null;
+    if (JSON.stringify(next) !== JSON.stringify(drawings)) onjob({ ...job, ply_drawings: next });
   }
   const paperName = (p: Paper) => (p.kind === "roll" ? `a ${p.width_mm} mm plotter roll` : p.kind === "letter" ? "Letter" : p.kind.toUpperCase());
   function setTime(s: number) {
@@ -454,10 +460,31 @@
           >
         {/if}
       </div>
+      <div class="tpl">
+        <span class="lbl">Ply drawings</span>
+        <div class="seg">
+          <button class:on={!drawings} onclick={() => setDrawings(null)}>Off</button>
+          <button class:on={drawings?.turn === "as-cut"} onclick={() => setDrawings({ turn: "as-cut" })} title="Turned so the fibre runs along x, the way the ply comes off the roll"
+            >As cut</button
+          >
+          <button class:on={drawings?.turn === "as-drawn"} onclick={() => setDrawings({ turn: "as-drawn" })} title="As in the CAD drawing, with the fibre line at the ply angle"
+            >As drawn</button
+          >
+        </div>
+        {#if drawings}
+          <div class="seg">
+            <button class:on={drawings.files === "per-ply"} onclick={() => setDrawings({ files: "per-ply" })} title="One DXF per ply and angle, in a ply-drawings folder"
+              >File per ply</button
+            >
+            <button class:on={drawings.files === "one-file"} onclick={() => setDrawings({ files: "one-file" })} title="All plies side by side in ply-drawings.dxf">One file</button>
+          </div>
+        {/if}
+      </div>
       <button class="primary big" onclick={onexport} disabled={!!exportBlock} title={exportBlock ?? "Write the cut files, report.pdf and labels.csv"}>Export cut files…</button>
       {#if exportBlock}<p class="hint">{exportBlock}.</p>{:else}<p class="hint">
           Writes layout.dxf (CUT, MARK, LABEL, ROLL layers), report.pdf (numbers, layout, kit checklist), labels.csv for label printers, plies.csv, layout.svg and
-          report.json{#if paper}, and templates.pdf: the layout at true size on {paperName(paper)}, to print at 100% and tape together{/if}.
+          report.json{#if paper}, and templates.pdf: the layout at true size on {paperName(paper)}, to print at 100% and tape together{/if}{#if drawings}. Also a DXF of
+            every ply at every angle {drawings.turn === "as-cut" ? "turned as cut" : "as drawn"}, {drawings.files === "per-ply" ? "one file per ply in ply-drawings/" : "all in ply-drawings.dxf"}{/if}.
         </p>{/if}
       {#if booking}
         <div class="booking">
@@ -579,6 +606,9 @@
     margin-top: 14px;
     font-size: 12px;
     color: var(--muted);
+  }
+  .tpl .lbl {
+    margin-right: 2px;
   }
   .tpl select {
     width: auto;

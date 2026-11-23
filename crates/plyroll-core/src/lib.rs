@@ -2,6 +2,7 @@
 //! rules, layout verification and export. The nesting solver lives in
 //! `plyroll-nest` so this crate stays free of solver dependencies.
 
+pub mod drawings;
 pub mod export;
 pub mod geom;
 pub mod import;

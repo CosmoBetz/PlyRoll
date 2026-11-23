@@ -146,7 +146,7 @@ fn templates_are_written_only_when_asked_and_verified() {
     let names = |w: Vec<PathBuf>| w.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
     let w = write_outputs(&dir, &plies, &layout, &sum, &RunInfo::default(), &[], &meta, &OutputOptions::default()).unwrap();
     assert!(!names(w).contains(&"templates.pdf".to_string()));
-    let opts = OutputOptions { templates: Some(Paper::Roll { width_mm: 914.0 }) };
+    let opts = OutputOptions { templates: Some(Paper::Roll { width_mm: 914.0 }), ..Default::default() };
     let w = write_outputs(&dir, &plies, &layout, &sum, &RunInfo::default(), &[], &meta, &opts).unwrap();
     assert_eq!(names(w).last().unwrap(), "templates.pdf");
     // Exported again without templates: the old templates.pdf goes.

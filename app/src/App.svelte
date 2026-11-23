@@ -336,7 +336,12 @@
     if (!dir) return;
     try {
       const files = await backend.exportResult(dir);
-      toast(`Wrote ${files.map((f) => f.split(/[\\/]/).pop()).join(", ")} to ${dir}`);
+      // The ply drawings folder as one entry, not a name per ply.
+      const inFolder = (f: string) => /[\\/]ply-drawings[\\/][^\\/]*$/.test(f);
+      const names = files.filter((f) => !inFolder(f)).map((f) => f.split(/[\\/]/).pop());
+      const drawn = files.filter(inFolder).length;
+      if (drawn) names.push(`ply-drawings/ (${drawn} drawings)`);
+      toast(`Wrote ${names.join(", ")} to ${dir}`);
     } catch (e) {
       toast(String(e), "error");
     }

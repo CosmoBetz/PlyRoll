@@ -809,7 +809,7 @@ fn export_result(dir: String, state: Shared, inv: SharedInv) -> CmdResult<Vec<St
     let inv = inv.lock().unwrap();
     let roll = job_roll(&st, &inv, &r.layout.material.name)?.map(|x| RollInfo::of(x, &result_key(&r.fingerprint, r.run.seed), &today_utc()));
     let meta = ReportMeta::new(job_name(&st)).with_roll(roll);
-    let opts = OutputOptions { templates: st.project.job.templates };
+    let opts = OutputOptions { templates: st.project.job.templates, ply_drawings: st.project.job.ply_drawings };
     let files = write_outputs(&PathBuf::from(dir), &r.plies, &r.layout, &r.summary, &r.run, &r.warnings, &meta, &opts).map_err(err)?;
     Ok(files.iter().map(|p| p.display().to_string()).collect())
 }

@@ -3,7 +3,7 @@
 Free, local nesting for carbon-fibre prepreg plies on an endless roll.
 Every ply keeps its fibre direction (UD) or warp direction (twill); plies are never flipped.
 
-Status: **Phase 1 command-line tool; Phase 2 desktop app with orientation editor, material library, nesting and reports; Phase 3 under way (kit-by-kit nesting, roll inventory, 1:1 printable templates, editing a nest by hand, re-nesting after locked plies, splitting plies wider than the roll).** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
+Status: **Phase 1 command-line tool; Phase 2 desktop app with orientation editor, material library, nesting and reports; Phase 3 under way (kit-by-kit nesting, roll inventory, 1:1 printable templates, editing a nest by hand, re-nesting after locked plies, splitting plies wider than the roll, ply drawings).** See [docs/PLAN.md](docs/PLAN.md) for the full plan.
 Nesting is done by [sparrow](https://github.com/JeroenGar/sparrow) on top of
 [jagua-rs](https://github.com/JeroenGar/jagua-rs).
 
@@ -111,7 +111,8 @@ Nesting:
    included, and asks first. Kit by kit, locked plies cannot be kept (switching the layout makes the nest out of date, which drops them too):
    keeping them works on nests made with the Mixed layout.
 6. **Export cut files…** writes the same files as the CLI (see [Output](#output)) to a folder you pick. Choose
-   **1:1 templates** (A4, A3, Letter or a plotter roll width) to also get `templates.pdf`.
+   **1:1 templates** (A4, A3, Letter or a plotter roll width) to also get `templates.pdf`. Turn on **Ply drawings**
+   (as cut or as drawn, a file per ply or one file) to also get a DXF of every ply for the plybook.
 7. Once the job is cut, **Book … m on roll …** takes the used length off the roll in the inventory. Each nest can be
    booked once, and **Take back** undoes it. To book a second cut of the same saved nest, nest again or correct the
    roll's length in **Manage rolls…**.
@@ -124,7 +125,8 @@ Or nest the saved project from the command line. It uses the project's material,
 ```
 
 `plyroll export my-job.plyroll -o out/my-job` writes the files of the nest saved in the project without nesting again
-(refused if it is out of date). Both commands take `--templates a4|a3|letter|roll:<mm>` and `--roll <id>` (with
+(refused if it is out of date). Both commands take `--templates a4|a3|letter|roll:<mm>`,
+`--ply-drawings as-cut|as-drawn|off`, `--ply-drawing-files per-ply|one-file` and `--roll <id>` (with
 `--rolls <file>`, default `rolls.toml` next to the job), and default to the project's choices. Splits saved in the
 project are used; `--auto-split` also splits the angles that are still too wide (for a job CSV it is the only way to
 split).
@@ -214,6 +216,7 @@ is booked. Renaming a material in the app renames it on its rolls too.
 | `report.pdf` | nest report (A4 landscape): material, length, utilisation, scrap, cost, verification, the layout with cut numbers and a position scale, then a kit checklist with a tick box per ply, its cut number and its position on the roll |
 | `labels.csv` | one row per cut ply for label printers: cut number, label text, shape, angle, copy *n of m*, kit, material, job, position, roll, batch |
 | `templates.pdf` | only when asked for: the layout at true size, tiled over A4 / A3 / Letter sheets or plotter-roll pages (see below) |
+| `ply-drawings/` or `ply-drawings.dxf` | only when asked for: every ply at every angle, a file each or all in one (see below) |
 | `report.json` | length, utilisation, cost, verification result, full layout |
 | `orientation.svg` | 0° axes and fibre directions before nesting |
 
@@ -235,6 +238,12 @@ line and the half registration marks meet, and tape. Pages show cut lines, marki
 and the label. Tiles without a ply are not printed. Sheets are turned whichever way needs fewer pages; plotter pages
 are at most 5 m long.
 
+**Ply drawings** are for the plybook: one drawing per ply and angle, with the same `CUT`, `MARK` and `LABEL` layers
+as `layout.dxf`, the fibre line and a caption such as `rib +45°`. *As cut* turns each ply so the fibre runs along x,
+as it comes off the roll. *As drawn* keeps the ply as in the CAD drawing, with the fibre line at the ply angle; a
+drawing mirrored on import is shown as CAD shows it. A split ply comes as its pieces. A file per ply goes in `ply-drawings/` as `<ply>_<angle>.dxf`;
+one file puts them all in rows in `ply-drawings.dxf`.
+
 Kit by kit, the report's layout shows a divider and the kit name where each kit starts, the checklist headings give
 each kit's stretch of roll, and `report.json` lists the sections.
 
@@ -255,7 +264,7 @@ are ignored.
 - Re-nesting around locked plies only fills the roll after the last locked ply, not the space between or beside them:
   that needs fixed obstacles in the solver, which sparrow does not support yet. It works on Mixed layouts only, and
   only in the app (the CLI always nests everything). There is no warm start either.
-- Templates are of the whole layout; there are no single-ply templates.
+- Templates are of the whole layout; single plies only come as DXF ply drawings, not as printable pages.
 - Split lines run across the whole ply: no stepped or staggered splices, and no splice marks on the pieces.
 - Filling holes is a quick pass before the solver: plies are placed one after another on a grid, and a few orders are
   tried. It can miss tight fits that a person would find. Moving a ply by hand leaves the plies in its holes where they are.

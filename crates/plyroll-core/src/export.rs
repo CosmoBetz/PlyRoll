@@ -32,10 +32,12 @@ pub fn placed_path(p: &Path, pl: &Placement) -> Path {
 }
 
 pub fn label_text(ply: &PlyShape, pl: &Placement) -> String {
-    let v = &ply.variants[pl.variant_idx];
-    let a = v.angle_deg;
-    let ang = if a == 0.0 { "0".to_string() } else if a.fract() == 0.0 { format!("{a:+}") } else { format!("{a:+.1}") };
-    format!("{} {}°", ply.shape.name, ang)
+    format!("{} {}°", ply.shape.name, angle_text(ply.variants[pl.variant_idx].angle_deg))
+}
+
+/// A ply angle as written on labels: "0", "+45", "-22.5".
+pub fn angle_text(a: f64) -> String {
+    if a == 0.0 { "0".to_string() } else if a.fract() == 0.0 { format!("{a:+}") } else { format!("{a:+.1}") }
 }
 
 pub fn labels(plies: &[PlyShape], layout: &Layout) -> Vec<Label> {
@@ -44,20 +46,26 @@ pub fn labels(plies: &[PlyShape], layout: &Layout) -> Vec<Label> {
         .iter()
         .map(|pl| {
             let ply = &plies[pl.shape_idx];
-            let outer = placed_path(&ply.shape.outer, pl).flatten(0.2, FlattenMode::Inscribed);
-            let holes: Vec<LineString<f64>> =
-                ply.shape.holes.iter().map(|h| to_ls(&placed_path(h, pl).flatten(0.2, FlattenMode::Inscribed))).collect();
-            let poly = Polygon::new(to_ls(&outer), holes);
-            let at = polylabel::polylabel(&poly, &0.5).map(|p| Pt::new(p.x(), p.y())).unwrap_or_else(|_| {
-                let b = BBox::of(&outer);
-                Pt::new((b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0)
-            });
-            let room = Euclidean.distance(&Point::new(at.x, at.y), poly.exterior());
-            let room = poly.interiors().iter().map(|h| Euclidean.distance(&Point::new(at.x, at.y), h)).fold(room, f64::min);
+            let holes: Vec<Path> = ply.shape.holes.iter().map(|h| placed_path(h, pl)).collect();
+            let (at, room) = inside_point(&placed_path(&ply.shape.outer, pl), &holes);
             let fibre = ply.fibre_deg(&ply.variants[pl.variant_idx]) + pl.rotation_deg;
             Label { at, room, text: label_text(ply, pl), fibre_dir: norm_deg(fibre) % 180.0 }
         })
         .collect()
+}
+
+/// The point inside a part farthest from its edges, and that distance.
+pub(crate) fn inside_point(outer: &Path, holes: &[Path]) -> (Pt, f64) {
+    let outer = outer.flatten(0.2, FlattenMode::Inscribed);
+    let holes: Vec<LineString<f64>> = holes.iter().map(|h| to_ls(&h.flatten(0.2, FlattenMode::Inscribed))).collect();
+    let poly = Polygon::new(to_ls(&outer), holes);
+    let at = polylabel::polylabel(&poly, &0.5).map(|p| Pt::new(p.x(), p.y())).unwrap_or_else(|_| {
+        let b = BBox::of(&outer);
+        Pt::new((b.min.x + b.max.x) / 2.0, (b.min.y + b.max.y) / 2.0)
+    });
+    let room = Euclidean.distance(&Point::new(at.x, at.y), poly.exterior());
+    let room = poly.interiors().iter().map(|h| Euclidean.distance(&Point::new(at.x, at.y), h)).fold(room, f64::min);
+    (at, room)
 }
 
 fn to_ls(pts: &[Pt]) -> LineString<f64> {
@@ -94,43 +102,72 @@ fn text_height(l: &Label) -> f64 {
     (l.room * 0.35).clamp(1.5, 8.0)
 }
 
-pub fn write_dxf(path: &FsPath, plies: &[PlyShape], layout: &Layout) -> Result<()> {
-    use dxf::entities::{Entity, EntityType, Line, LwPolyline, Text};
-    use dxf::enums::{AcadVersion, HorizontalTextJustification, Units, VerticalTextJustification};
-    use dxf::tables::Layer;
-    use dxf::{Color, LwPolylineVertex, Point as DPoint};
+/// A DXF drawing in mm with PlyRoll's layers.
+pub(crate) struct Dxf(dxf::Drawing);
 
-    let mut d = dxf::Drawing::new();
-    d.header.version = AcadVersion::R2000;
-    d.header.default_drawing_units = Units::Millimeters;
-    for (name, color) in [("CUT", 7u8), ("MARK", 3), ("LABEL", 5), ("ROLL", 8)] {
-        d.add_layer(Layer { name: name.into(), color: Color::from_index(color), ..Default::default() });
+impl Dxf {
+    pub(crate) fn new(layers: &[(&str, u8)]) -> Self {
+        use dxf::enums::{AcadVersion, Units};
+        let mut d = dxf::Drawing::new();
+        d.header.version = AcadVersion::R2000;
+        d.header.default_drawing_units = Units::Millimeters;
+        for &(name, color) in layers {
+            d.add_layer(dxf::tables::Layer { name: name.into(), color: dxf::Color::from_index(color), ..Default::default() });
+        }
+        Dxf(d)
     }
-    let add = |d: &mut dxf::Drawing, layer: &str, et: EntityType| {
-        let mut e = Entity::new(et);
+
+    fn add(&mut self, layer: &str, et: dxf::entities::EntityType) {
+        let mut e = dxf::entities::Entity::new(et);
         e.common.layer = layer.into();
-        d.add_entity(e);
-    };
-    let poly = |p: &Path| {
-        let mut lw = LwPolyline::default();
+        self.0.add_entity(e);
+    }
+
+    /// A path as a polyline with bulges, so arcs stay exact.
+    pub(crate) fn path(&mut self, layer: &str, p: &Path) {
+        let mut lw = dxf::entities::LwPolyline::default();
         for v in &p.verts {
-            lw.vertices.push(LwPolylineVertex { x: v.p.x, y: v.p.y, bulge: v.bulge, ..Default::default() });
+            lw.vertices.push(dxf::LwPolylineVertex { x: v.p.x, y: v.p.y, bulge: v.bulge, ..Default::default() });
         }
         lw.set_is_closed(p.closed);
-        EntityType::LwPolyline(lw)
-    };
-    let line = |a: Pt, b: Pt| EntityType::Line(Line::new(DPoint::new(a.x, a.y, 0.0), DPoint::new(b.x, b.y, 0.0)));
+        self.add(layer, dxf::entities::EntityType::LwPolyline(lw));
+    }
 
+    pub(crate) fn line(&mut self, layer: &str, a: Pt, b: Pt) {
+        use dxf::Point as DPoint;
+        self.add(layer, dxf::entities::EntityType::Line(dxf::entities::Line::new(DPoint::new(a.x, a.y, 0.0), DPoint::new(b.x, b.y, 0.0))));
+    }
+
+    /// Text centred on `at`.
+    pub(crate) fn text(&mut self, layer: &str, at: Pt, height: f64, value: &str) {
+        use dxf::enums::{HorizontalTextJustification, VerticalTextJustification};
+        let mut t = dxf::entities::Text::default();
+        t.location = dxf::Point::new(at.x, at.y, 0.0);
+        t.second_alignment_point = t.location.clone();
+        t.text_height = height;
+        t.value = value.into();
+        t.horizontal_text_justification = HorizontalTextJustification::Center;
+        t.vertical_text_justification = VerticalTextJustification::Middle;
+        self.add(layer, dxf::entities::EntityType::Text(t));
+    }
+
+    pub(crate) fn save(self, path: &FsPath) -> Result<()> {
+        self.0.save_file(path).with_context(|| format!("cannot write {}", path.display()))
+    }
+}
+
+pub fn write_dxf(path: &FsPath, plies: &[PlyShape], layout: &Layout) -> Result<()> {
+    let mut d = Dxf::new(&[("CUT", 7), ("MARK", 3), ("LABEL", 5), ("ROLL", 8)]);
     let m = &layout.material;
     let len = layout.used_length;
     // Roll outline, trims and cross-cut.
-    add(&mut d, "ROLL", poly(&Path::from_points(&[Pt::new(0.0, 0.0), Pt::new(len, 0.0), Pt::new(len, m.roll_width), Pt::new(0.0, m.roll_width)], true)));
+    d.path("ROLL", &Path::from_points(&[Pt::new(0.0, 0.0), Pt::new(len, 0.0), Pt::new(len, m.roll_width), Pt::new(0.0, m.roll_width)], true));
     if m.edge_trim > 0.0 {
-        add(&mut d, "ROLL", line(Pt::new(0.0, m.edge_trim), Pt::new(len, m.edge_trim)));
-        add(&mut d, "ROLL", line(Pt::new(0.0, m.roll_width - m.edge_trim), Pt::new(len, m.roll_width - m.edge_trim)));
+        d.line("ROLL", Pt::new(0.0, m.edge_trim), Pt::new(len, m.edge_trim));
+        d.line("ROLL", Pt::new(0.0, m.roll_width - m.edge_trim), Pt::new(len, m.roll_width - m.edge_trim));
     }
     if m.lead_trim > 0.0 {
-        add(&mut d, "ROLL", line(Pt::new(m.lead_trim, 0.0), Pt::new(m.lead_trim, m.roll_width)));
+        d.line("ROLL", Pt::new(m.lead_trim, 0.0), Pt::new(m.lead_trim, m.roll_width));
     }
 
     let labels = labels(plies, layout);
@@ -140,34 +177,26 @@ pub fn write_dxf(path: &FsPath, plies: &[PlyShape], layout: &Layout) -> Result<(
         let pl = &layout.placements[i];
         let ply = &plies[pl.shape_idx];
         for mk in &ply.shape.marks {
-            add(&mut d, "MARK", poly(&placed_path(mk, pl)));
+            d.path("MARK", &placed_path(mk, pl));
         }
         if let Some((a, b)) = fibre_line(&labels[i]) {
-            add(&mut d, "MARK", line(a, b));
+            d.line("MARK", a, b);
         }
     }
     for &i in &order {
         let l = &labels[i];
         let h = text_height(l);
-        let mut t = Text::default();
-        t.location = DPoint::new(l.at.x, l.at.y - h * 1.2, 0.0);
-        t.second_alignment_point = t.location.clone();
-        t.text_height = h;
-        t.value = l.text.clone();
-        t.horizontal_text_justification = HorizontalTextJustification::Center;
-        t.vertical_text_justification = VerticalTextJustification::Middle;
-        add(&mut d, "LABEL", EntityType::Text(t));
+        d.text("LABEL", Pt::new(l.at.x, l.at.y - h * 1.2), h, &l.text);
     }
     for &i in &order {
         let pl = &layout.placements[i];
         let ply = &plies[pl.shape_idx];
         for h in &ply.shape.holes {
-            add(&mut d, "CUT", poly(&placed_path(h, pl)));
+            d.path("CUT", &placed_path(h, pl));
         }
-        add(&mut d, "CUT", poly(&placed_path(&ply.shape.outer, pl)));
+        d.path("CUT", &placed_path(&ply.shape.outer, pl));
     }
-    d.save_file(path).with_context(|| format!("cannot write {}", path.display()))?;
-    Ok(())
+    d.save(path)
 }
 
 /// Colour per ply angle (same angle -> same colour across shapes).

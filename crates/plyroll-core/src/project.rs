@@ -248,11 +248,14 @@ pub struct JobSettings {
     /// Also export 1:1 templates on this paper.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub templates: Option<crate::template::Paper>,
+    /// Also export a DXF of every ply at every angle, for the plybook.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ply_drawings: Option<crate::drawings::PlyDrawings>,
 }
 
 impl Default for JobSettings {
     fn default() -> Self {
-        Self { material: None, time_s: 60, sets: 1, grouping: Grouping::Global, roll: None, templates: None }
+        Self { material: None, time_s: 60, sets: 1, grouping: Grouping::Global, roll: None, templates: None, ply_drawings: None }
     }
 }
 

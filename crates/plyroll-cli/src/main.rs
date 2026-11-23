@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use plyroll_core::drawings::{Files, PlyDrawings, Turn};
 use plyroll_core::export;
 use plyroll_core::geom::{BBox, FlattenMode};
 use plyroll_core::import::{ImportOptions, UnitsOverride, import_dxf};
@@ -109,6 +110,15 @@ struct OutArgs {
     /// a4, a3, letter, or roll:<width mm> for a plotter roll. Default: the project's setting.
     #[arg(long, value_parser = parse_paper)]
     templates: Option<Paper>,
+    /// Also write a DXF of every ply at every angle, for the plybook: as-cut
+    /// (turned so the fibre runs along x) or as-drawn (as in the CAD drawing).
+    /// off writes none. Default: the project's setting.
+    #[arg(long, value_enum)]
+    ply_drawings: Option<DrawingsArg>,
+    /// Ply drawings as one file per ply in ply-drawings/ (per-ply) or all in
+    /// ply-drawings.dxf (one-file). Default: the project's setting, else per-ply.
+    #[arg(long, value_enum)]
+    ply_drawing_files: Option<DrawingFilesArg>,
     /// Roll from the inventory to cut from (its id); its batch goes on the
     /// report and labels. Default: the project's roll.
     #[arg(long)]
@@ -116,6 +126,37 @@ struct OutArgs {
     /// Roll inventory (TOML). Default: rolls.toml next to the job file.
     #[arg(long)]
     rolls: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum DrawingsArg {
+    AsCut,
+    AsDrawn,
+    Off,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum DrawingFilesArg {
+    PerPly,
+    OneFile,
+}
+
+/// Ply drawings from the command line over the project's setting. Asking for
+/// a file layout alone turns them on (as the project has them, else as cut).
+fn ply_drawings(extra: &OutArgs, saved: Option<&project::JobSettings>) -> Option<PlyDrawings> {
+    let saved = saved.and_then(|j| j.ply_drawings);
+    let files = extra.ply_drawing_files.map(|f| match f {
+        DrawingFilesArg::PerPly => Files::PerPly,
+        DrawingFilesArg::OneFile => Files::OneFile,
+    });
+    let turn = match extra.ply_drawings {
+        Some(DrawingsArg::Off) => return None,
+        Some(DrawingsArg::AsCut) => Turn::AsCut,
+        Some(DrawingsArg::AsDrawn) => Turn::AsDrawn,
+        None if saved.is_none() && files.is_none() => return None,
+        None => saved.map_or(Turn::AsCut, |d| d.turn),
+    };
+    Some(PlyDrawings { turn, files: files.or(saved.map(|d| d.files)).unwrap_or(Files::PerPly) })
 }
 
 fn parse_paper(s: &str) -> Result<Paper, String> {
@@ -436,9 +477,10 @@ fn print_ply_table(plies: &[PlyShape]) {
 fn out_options(job: &Path, extra: &OutArgs, saved: Option<&project::JobSettings>, material: &Material, key: &str) -> Result<(ReportMeta, OutputOptions)> {
     let name = job.file_stem().map_or_else(|| "job".to_string(), |s| s.to_string_lossy().into_owned());
     let templates = extra.templates.or(saved.and_then(|j| j.templates));
+    let ply_drawings = ply_drawings(extra, saved);
     let explicit = extra.roll.is_some();
     let Some(id) = extra.roll.clone().or(saved.and_then(|j| j.roll.clone())) else {
-        return Ok((ReportMeta::new(name), OutputOptions { templates }));
+        return Ok((ReportMeta::new(name), OutputOptions { templates, ply_drawings }));
     };
     let path = extra.rolls.clone().unwrap_or_else(|| job.parent().unwrap_or(Path::new(".")).join("rolls.toml"));
     // A roll the project picked but this machine has no inventory for is only a warning.
@@ -447,7 +489,7 @@ fn out_options(job: &Path, extra: &OutArgs, saved: Option<&project::JobSettings>
             return Err(e);
         }
         eprintln!("warning: {e:#}; the report has no roll");
-        Ok((ReportMeta::new(name.clone()), OutputOptions { templates }))
+        Ok((ReportMeta::new(name.clone()), OutputOptions { templates, ply_drawings }))
     };
     let rolls = match load_rolls(&path) {
         Ok(r) => r,
@@ -464,7 +506,7 @@ fn out_options(job: &Path, extra: &OutArgs, saved: Option<&project::JobSettings>
     if roll.expired(&today) {
         eprintln!("warning: roll '{}' expired on {}", roll.id, roll.expires.as_deref().unwrap_or_default());
     }
-    Ok((ReportMeta::new(name).with_roll(Some(info)), OutputOptions { templates }))
+    Ok((ReportMeta::new(name).with_roll(Some(info)), OutputOptions { templates, ply_drawings }))
 }
 
 fn finish(out: &Path, plies: &[PlyShape], layout: &plyroll_core::model::Layout, warnings: &[String], run: &RunInfo, meta: ReportMeta, opts: &OutputOptions) -> Result<i32> {
@@ -504,7 +546,13 @@ fn finish(out: &Path, plies: &[PlyShape], layout: &plyroll_core::model::Layout, 
     for s in &layout.sections {
         println!("  kit {:<12} {:>9.1} .. {:>9.1} mm", s.kit.as_deref().unwrap_or("(no kit)"), s.start, s.end);
     }
-    let names: Vec<String> = written.iter().filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).collect();
+    // The ply drawings folder as one entry, not a name per ply.
+    let folder = out.join(plyroll_core::drawings::FOLDER);
+    let mut names: Vec<String> = written.iter().filter(|p| !p.starts_with(&folder)).filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).collect();
+    let drawn = written.iter().filter(|p| p.starts_with(&folder)).count();
+    if drawn > 0 {
+        names.push(format!("{}/ ({drawn} drawings)", plyroll_core::drawings::FOLDER));
+    }
     println!("\nwrote {}/{{{}}}", out.display(), names.join(", "));
     Ok(0)
 }

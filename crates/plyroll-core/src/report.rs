@@ -84,6 +84,8 @@ impl ReportMeta {
 pub struct OutputOptions {
     /// Write templates.pdf (1:1, tiled) on this paper.
     pub templates: Option<Paper>,
+    /// Write a DXF drawing of every ply at every angle.
+    pub ply_drawings: Option<crate::drawings::PlyDrawings>,
 }
 
 /// Today as "2026-11-21" (UTC).
@@ -239,7 +241,8 @@ pub fn write_label_csv(path: &Path, plies: &[PlyShape], layout: &Layout, meta: &
 }
 
 /// Writes report.json and layout.svg always; layout.dxf, plies.csv,
-/// report.pdf, labels.csv and (when asked for) templates.pdf only when
+/// report.pdf, labels.csv and (when asked for) templates.pdf and the ply
+/// drawings only when
 /// verification passed, removing any of them left from an earlier export.
 /// Returns the files written.
 #[allow(clippy::too_many_arguments)]
@@ -307,10 +310,18 @@ pub fn write_outputs(
             std::fs::write(&tpl, bytes).with_context(|| format!("cannot write {}", tpl.display()))?;
             written.push(tpl);
         }
+        if let Some(d) = &opts.ply_drawings {
+            written.extend(crate::drawings::write(dir, plies, d)?);
+        }
     }
     // A file from an earlier export that was not written this time would
     // describe another layout: remove it, so a folder never mixes two nests.
-    for name in ["layout.dxf", "plies.csv", "report.pdf", "labels.csv", "templates.pdf"] {
+    let folder = dir.join(crate::drawings::FOLDER);
+    if !written.iter().any(|f| f.starts_with(&folder)) {
+        crate::drawings::clear(&folder)?;
+        let _ = std::fs::remove_dir(&folder); // only goes when empty
+    }
+    for name in ["layout.dxf", "plies.csv", "report.pdf", "labels.csv", "templates.pdf", crate::drawings::ONE_FILE] {
         let f = dir.join(name);
         if !written.contains(&f) {
             match std::fs::remove_file(&f) {
