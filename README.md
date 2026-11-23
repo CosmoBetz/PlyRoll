@@ -23,7 +23,7 @@ Get the desktop app and the command-line tool from [Releases](https://github.com
 The apps are not signed with a paid certificate, so the system warns the first time:
 
 - **macOS:** open the app once and close the warning, then go to System Settings → Privacy & Security and click
-  **Open Anyway**.
+  **Open Anyway**. The command-line tool is allowed the same way after its first refusal.
 - **Windows:** on "Windows protected your PC", click **More info**, then **Run anyway**.
 
 To try it, download `plyroll-demo.zip` as well. Open `demo.plyroll`, then in **Manage materials…** use **Import…** to
