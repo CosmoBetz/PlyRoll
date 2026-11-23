@@ -21,7 +21,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
-      - run: cargo test --workspace --release
+      # Core, solver and CLI; the desktop app has no tests of its own.
+      - run: cargo test --release
 
   build:
     needs: test
